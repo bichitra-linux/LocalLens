@@ -1,4 +1,10 @@
 import { registerRootComponent } from 'expo';
+import { Platform } from 'react-native';
+
+// Import Leaflet CSS for web
+if (Platform.OS === 'web') {
+  require('leaflet/dist/leaflet.css');
+}
 
 import App from './App';
 

@@ -1,20 +1,24 @@
+import React, { useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { QueryProvider } from './src/presentation/store/queryClient';
+import { AppNavigator } from './src/presentation/navigation/AppNavigator';
+import { logDummyCredentials } from './src/utils/devSeeder';
 
 export default function App() {
+  useEffect(() => {
+    // Log dummy credentials in development
+    if (__DEV__) {
+      logDummyCredentials();
+    }
+  }, []);
+
   return (
-    <View style={styles.container}>
-      <Text>Open up App.tsx to start working on your app!</Text>
-      <StatusBar style="auto" />
-    </View>
+    <SafeAreaProvider>
+      <QueryProvider>
+        <AppNavigator />
+        <StatusBar style="auto" />
+      </QueryProvider>
+    </SafeAreaProvider>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});
