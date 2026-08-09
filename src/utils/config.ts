@@ -17,6 +17,7 @@ export interface AppConfig {
     storageBucket: string;
     messagingSenderId: string;
     appId: string;
+    googleWebClientId: string;
   };
   
   // Features
@@ -30,10 +31,10 @@ export interface AppConfig {
   // Emulators (for development)
   emulators: {
     useFirebaseEmulator: boolean;
+    authHost: string;
+    authPort: number;
     firestoreHost: string;
     firestorePort: number;
-    storageHost: string;
-    storagePort: number;
   };
 }
 
@@ -69,6 +70,7 @@ export const config: AppConfig = {
     storageBucket: getString(process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET, 'demo-project.appspot.com'),
     messagingSenderId: getString(process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID, '123456789'),
     appId: getString(process.env.EXPO_PUBLIC_FIREBASE_APP_ID, '1:123456789:web:demo'),
+    googleWebClientId: getString(process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID, ''),
   },
   
   // Feature flags
@@ -82,10 +84,10 @@ export const config: AppConfig = {
   // Firebase emulator settings
   emulators: {
     useFirebaseEmulator: getBoolean(process.env.EXPO_PUBLIC_USE_FIREBASE_EMULATOR, false),
+    authHost: getString(process.env.EXPO_PUBLIC_AUTH_EMULATOR_HOST, 'localhost'),
+    authPort: getNumber(process.env.EXPO_PUBLIC_AUTH_EMULATOR_PORT, 9099),
     firestoreHost: getString(process.env.EXPO_PUBLIC_FIRESTORE_EMULATOR_HOST, 'localhost'),
     firestorePort: getNumber(process.env.EXPO_PUBLIC_FIRESTORE_EMULATOR_PORT, 8080),
-    storageHost: getString(process.env.EXPO_PUBLIC_STORAGE_EMULATOR_HOST, 'localhost'),
-    storagePort: getNumber(process.env.EXPO_PUBLIC_STORAGE_EMULATOR_PORT, 9199),
   },
 };
 
@@ -103,5 +105,16 @@ if (config.isDevelopment) {
     console.warn('⚠️ Using fallback Firebase configuration - check .env.local file');
   }
 }
+
+export const APP_CONFIG = {
+  osrmBaseUrl: 'https://router.project-osrm.org',
+  appUrl: 'https://locallens.app',
+  defaultMapCenter: { latitude: 40.7128, longitude: -74.006 },
+  walkingSpeedMps: 1.39,
+  maxRetries: 5,
+  maxCachedNotes: 200,
+  maxDrafts: 10,
+  staleDays: 7,
+};
 
 export default config;

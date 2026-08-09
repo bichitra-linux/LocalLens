@@ -1,103 +1,134 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
-  ScrollView,
+  FlatList,
   StyleSheet,
   Image,
   TouchableOpacity,
   TextInput,
   Alert,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRoute, RouteProp } from '@react-navigation/native';
+import { useRoute, useNavigation, RouteProp } from '@react-navigation/native';
+import { useHeaderHeight } from '@react-navigation/elements';
 import { Ionicons } from '@expo/vector-icons';
+import { StackNavigationProp } from '@react-navigation/stack';
 import { RootStackParamList } from '../navigation/AppNavigator';
-import { useNote } from '../hooks/useNotes';
-import { useVoteOnNote, useComments, useAddComment } from '../hooks/useInteractions';
+import * as Haptics from 'expo-haptics';
+import { useNote, useDeleteNote } from '../hooks/useNotes';
+import { useVoteOnNote, useComments, useAddComment, useDeleteComment } from '../hooks/useInteractions';
+import { useTheme } from '../hooks/useTheme';
+import { ThemeColors } from '../../utils/theme';
 import { useAppStore } from '../store/appStore';
+import { useIsBookmarked, useToggleBookmark } from '../hooks/useBookmarks';
 import { VoteType } from '../../domain/entities/Interaction';
+import { formatTimeAgoFull, formatExpiresIn } from '../../utils/formatTime';
 
 type NoteDetailScreenRouteProp = RouteProp<RootStackParamList, 'NoteDetail'>;
+type NoteDetailNavigationProp = StackNavigationProp<RootStackParamList>;
 
 export const NoteDetailScreen: React.FC = () => {
   const route = useRoute<NoteDetailScreenRouteProp>();
+  const navigation = useNavigation<NoteDetailNavigationProp>();
   const { noteId } = route.params;
   const { user } = useAppStore();
-  
+  const { colors } = useTheme();
+
   const [commentText, setCommentText] = useState('');
-  
+  const headerHeight = useHeaderHeight();
+
   const { data: note, isLoading: noteLoading } = useNote(noteId);
   const { data: commentsData, fetchNextPage, hasNextPage } = useComments(noteId);
   const voteOnNoteMutation = useVoteOnNote();
   const addCommentMutation = useAddComment();
+  const deleteNoteMutation = useDeleteNote();
+  const deleteCommentMutation = useDeleteComment();
+  const { data: isBookmarked } = useIsBookmarked(noteId);
+  const toggleBookmarkMutation = useToggleBookmark();
 
   const allComments = commentsData?.pages.flatMap(page => page.data) ?? [];
 
-  const handleVote = async (voteType: VoteType) => {
+  const handleVote = useCallback(async (voteType: VoteType) => {
     try {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
       await voteOnNoteMutation.mutateAsync({ noteId, voteType });
-    } catch (error: any) {
-      Alert.alert('Error', error.message);
+    } catch (error: unknown) {
+      Alert.alert('Error', error instanceof Error ? error.message : 'An error occurred');
     }
-  };
+  }, [voteOnNoteMutation, noteId]);
 
-  const handleAddComment = async () => {
+  const handleAddComment = useCallback(async () => {
     if (!commentText.trim()) {
       return;
     }
 
     try {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       await addCommentMutation.mutateAsync({
         noteId,
         content: commentText.trim(),
       });
       setCommentText('');
-    } catch (error: any) {
-      Alert.alert('Error', error.message);
+    } catch (error: unknown) {
+      Alert.alert('Error', error instanceof Error ? error.message : 'An error occurred');
     }
-  };
+  }, [addCommentMutation, noteId, commentText]);
 
-  const formatTimeAgo = (date: Date): string => {
-    const now = new Date();
-    const diffInMs = now.getTime() - date.getTime();
-    const diffInHours = Math.floor(diffInMs / (1000 * 60 * 60));
-    const diffInDays = Math.floor(diffInHours / 24);
+  const handleDeleteNote = useCallback(() => {
+    Alert.alert(
+      'Delete Note',
+      'Are you sure you want to delete this note? This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteNoteMutation.mutateAsync(noteId);
+              Alert.alert('Success', 'Note deleted');
+              navigation.goBack();
+            } catch (error: unknown) {
+              Alert.alert('Error', error instanceof Error ? error.message : 'An error occurred');
+            }
+          },
+        },
+      ]
+    );
+  }, [deleteNoteMutation, noteId, navigation]);
 
-    if (diffInDays > 0) {
-      return `${diffInDays} day${diffInDays > 1 ? 's' : ''} ago`;
-    } else if (diffInHours > 0) {
-      return `${diffInHours} hour${diffInHours > 1 ? 's' : ''} ago`;
-    } else {
-      const diffInMinutes = Math.floor(diffInMs / (1000 * 60));
-      return `${Math.max(1, diffInMinutes)} minute${diffInMinutes > 1 ? 's' : ''} ago`;
-    }
-  };
+  const handleDeleteComment = useCallback((commentId: string) => {
+    Alert.alert(
+      'Delete Comment',
+      'Are you sure you want to delete this comment?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deleteCommentMutation.mutateAsync({ commentId, noteId });
+            } catch (error: unknown) {
+              Alert.alert('Error', error instanceof Error ? error.message : 'An error occurred');
+            }
+          },
+        },
+      ]
+    );
+  }, [deleteCommentMutation, noteId]);
 
-  const formatExpiresIn = (expiresAt: Date): string => {
-    const now = new Date();
-    const diffInMs = expiresAt.getTime() - now.getTime();
-    const diffInHours = Math.floor(diffInMs / (1000 * 60 * 60));
-    const diffInDays = Math.floor(diffInHours / 24);
-
-    if (diffInMs <= 0) {
-      return 'Expired';
-    } else if (diffInDays > 0) {
-      return `Expires in ${diffInDays} day${diffInDays > 1 ? 's' : ''}`;
-    } else if (diffInHours > 0) {
-      return `Expires in ${diffInHours} hour${diffInHours > 1 ? 's' : ''}`;
-    } else {
-      const diffInMinutes = Math.floor(diffInMs / (1000 * 60));
-      return `Expires in ${Math.max(1, diffInMinutes)} minute${diffInMinutes > 1 ? 's' : ''}`;
-    }
-  };
+  const styles = createStyles(colors);
 
   if (noteLoading) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
         <View style={styles.center}>
-          <ActivityIndicator size="large" color="#2196F3" />
+          <ActivityIndicator size="large" color={colors.primary} />
         </View>
       </SafeAreaView>
     );
@@ -105,7 +136,7 @@ export const NoteDetailScreen: React.FC = () => {
 
   if (!note) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
         <View style={styles.center}>
           <Text>Note not found</Text>
         </View>
@@ -113,150 +144,214 @@ export const NoteDetailScreen: React.FC = () => {
     );
   }
 
+  const isOwner = user?.id === note.userId;
+
+  const handleNavigateToNote = useCallback(() => {
+    if (note) {
+      navigation.navigate('Navigation', {
+        destinationLat: note.location.latitude,
+        destinationLng: note.location.longitude,
+        destinationName: note.content.substring(0, 30),
+      });
+    }
+  }, [note, navigation]);
+
   return (
-    <SafeAreaView style={styles.container}>
-      <ScrollView style={styles.scrollView}>
-        <View style={styles.noteContainer}>
-          <View style={styles.noteHeader}>
-            <View style={styles.userInfo}>
-              <View style={styles.avatar}>
-                {note.userAvatar ? (
-                  <Image source={{ uri: note.userAvatar }} style={styles.avatarImage} />
-                ) : (
-                  <Ionicons name="person" size={20} color="#2196F3" />
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={headerHeight}
+        style={{ flex: 1 }}
+      >
+      <FlatList
+        data={allComments}
+        keyExtractor={(item) => item.id}
+        renderItem={({ item: comment }) => (
+          <View key={comment.id} style={[styles.commentContainer, { borderBottomColor: colors.background }]}>
+            <View style={styles.commentHeader}>
+              <View style={styles.commentUserInfo}>
+                <View style={[styles.commentAvatar, { backgroundColor: colors.primary + '20' }]}>
+                  {comment.userAvatar ? (
+                    <Image source={{ uri: comment.userAvatar }} style={styles.commentAvatarImage} accessibilityLabel={`${comment.username} avatar`} accessibilityRole="image" />
+                  ) : (
+                    <Ionicons name="person" size={16} color={colors.primary} />
+                  )}
+                </View>
+                <Text style={[styles.commentUsername, { color: colors.text }]}>{comment.username}</Text>
+              </View>
+              <View style={styles.commentHeaderRight}>
+                <Text style={[styles.commentTimestamp, { color: colors.textSecondary }]}>{formatTimeAgoFull(comment.createdAt)}</Text>
+                {user?.id === comment.userId && (
+                  <TouchableOpacity
+                    onPress={() => handleDeleteComment(comment.id)}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    style={styles.commentDeleteButton}
+                    accessibilityLabel="Delete comment"
+                    accessibilityRole="button"
+                  >
+                    <Ionicons name="trash-outline" size={14} color={colors.error} />
+                  </TouchableOpacity>
                 )}
               </View>
-              <View style={styles.userDetails}>
-                <Text style={styles.username}>{note.username}</Text>
-                <Text style={styles.timestamp}>{formatTimeAgo(note.createdAt)}</Text>
-              </View>
             </View>
-            <Text style={styles.expiresText}>{formatExpiresIn(note.expiresAt)}</Text>
+            <Text style={[styles.commentContent, { color: colors.text }]}>{comment.content}</Text>
           </View>
-
-          <Text style={styles.noteContent}>{note.content}</Text>
-
-          {note.imageUrl && (
-            <Image source={{ uri: note.imageUrl }} style={styles.noteImage} />
-          )}
-
-          <View style={styles.noteActions}>
-            <TouchableOpacity
-              style={[
-                styles.voteButton,
-                note.hasUserVoted === 'up' && styles.upvotedButton
-              ]}
-              onPress={() => handleVote('up')}
-              disabled={voteOnNoteMutation.isPending}
-            >
-              <Ionicons
-                name="arrow-up"
-                size={20}
-                color={note.hasUserVoted === 'up' ? '#fff' : '#4CAF50'}
-              />
-              <Text style={[
-                styles.voteText,
-                note.hasUserVoted === 'up' && styles.upvotedText
-              ]}>
-                {note.upvotes}
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[
-                styles.voteButton,
-                note.hasUserVoted === 'down' && styles.downvotedButton
-              ]}
-              onPress={() => handleVote('down')}
-              disabled={voteOnNoteMutation.isPending}
-            >
-              <Ionicons
-                name="arrow-down"
-                size={20}
-                color={note.hasUserVoted === 'down' ? '#fff' : '#f44336'}
-              />
-              <Text style={[
-                styles.voteText,
-                note.hasUserVoted === 'down' && styles.downvotedText
-              ]}>
-                {note.downvotes}
-              </Text>
-            </TouchableOpacity>
-
-            <View style={styles.commentCount}>
-              <Ionicons name="chatbubble-outline" size={20} color="#666" />
-              <Text style={styles.commentCountText}>{note.commentsCount}</Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.commentsSection}>
-          <Text style={styles.commentsTitle}>Comments</Text>
-
-          {user && (
-            <View style={styles.addCommentContainer}>
-              <TextInput
-                style={styles.commentInput}
-                placeholder="Add a comment..."
-                value={commentText}
-                onChangeText={setCommentText}
-                multiline
-                maxLength={280}
-              />
-              <TouchableOpacity
-                style={[
-                  styles.addCommentButton,
-                  !commentText.trim() && styles.addCommentButtonDisabled
-                ]}
-                onPress={handleAddComment}
-                disabled={addCommentMutation.isPending || !commentText.trim()}
-              >
-                {addCommentMutation.isPending ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Ionicons name="send" size={16} color="#fff" />
-                )}
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {allComments.map((comment) => (
-            <View key={comment.id} style={styles.commentContainer}>
-              <View style={styles.commentHeader}>
-                <View style={styles.commentUserInfo}>
-                  <View style={styles.commentAvatar}>
-                    {comment.userAvatar ? (
-                      <Image source={{ uri: comment.userAvatar }} style={styles.commentAvatarImage} />
+        )}
+        ListHeaderComponent={useMemo(() => (
+          <>
+            <View style={[styles.noteContainer, { backgroundColor: colors.surface }]}>
+              <View style={styles.noteHeader}>
+                <View style={styles.userInfo}>
+                  <View style={[styles.avatar, { backgroundColor: colors.primary + '20' }]}>
+                    {note.userAvatar ? (
+                      <Image source={{ uri: note.userAvatar }} style={styles.avatarImage} accessibilityLabel={`${note.username} avatar`} accessibilityRole="image" />
                     ) : (
-                      <Ionicons name="person" size={16} color="#2196F3" />
+                      <Ionicons name="person" size={20} color={colors.primary} />
                     )}
                   </View>
-                  <Text style={styles.commentUsername}>{comment.username}</Text>
+                  <View style={styles.userDetails}>
+                    <Text style={[styles.username, { color: colors.text }]}>{note.username}</Text>
+                    <Text style={[styles.timestamp, { color: colors.textSecondary }]}>{formatTimeAgoFull(note.createdAt)}</Text>
+                  </View>
                 </View>
-                <Text style={styles.commentTimestamp}>{formatTimeAgo(comment.createdAt)}</Text>
+                <View style={styles.headerRight}>
+                  <Text style={[styles.expiresText, { color: colors.error }]}>{formatExpiresIn(note.expiresAt)}</Text>
+                  {note.expiresAt && new Date(note.expiresAt).getTime() - Date.now() < 86400000 && (
+                    <View style={[styles.expirationWarning, { backgroundColor: colors.warning + '1A' }]}>
+                      <Ionicons name="time-outline" size={12} color={colors.warning} />
+                      <Text style={[styles.expirationWarningText, { color: colors.warning }]}>Expiring soon</Text>
+                    </View>
+                  )}
+                  {isOwner && (
+                    <TouchableOpacity
+                      onPress={handleDeleteNote}
+                      style={styles.deleteButton}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      accessibilityLabel="Delete note"
+                      accessibilityRole="button"
+                    >
+                      <Ionicons name="trash-outline" size={18} color={colors.error} />
+                    </TouchableOpacity>
+                  )}
+                </View>
               </View>
-              <Text style={styles.commentContent}>{comment.content}</Text>
-            </View>
-          ))}
 
-          {hasNextPage && (
-            <TouchableOpacity
-              style={styles.loadMoreButton}
-              onPress={() => fetchNextPage()}
-            >
-              <Text style={styles.loadMoreText}>Load More Comments</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      </ScrollView>
+              <Text style={[styles.noteContent, { color: colors.text }]}>{note.content}</Text>
+
+              <View style={styles.noteActions}>
+                <TouchableOpacity
+                  style={[
+                    styles.voteButton,
+                    { borderColor: colors.border },
+                    note.hasUserVoted === 'up' && [styles.upvotedButton, { backgroundColor: colors.success, borderColor: colors.success }],
+                  ]}
+                  onPress={() => handleVote('up')}
+                  disabled={voteOnNoteMutation.isPending}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  accessibilityLabel="Upvote"
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: note.hasUserVoted === 'up', disabled: voteOnNoteMutation.isPending }}
+                >
+                  <Ionicons name="arrow-up" size={20} color={note.hasUserVoted === 'up' ? colors.surface : colors.success} />
+                  <Text style={[styles.voteText, { color: colors.textSecondary }, note.hasUserVoted === 'up' && styles.upvotedText]}>{note.upvotes}</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[
+                    styles.voteButton,
+                    { borderColor: colors.border },
+                    note.hasUserVoted === 'down' && [styles.downvotedButton, { backgroundColor: colors.error, borderColor: colors.error }],
+                  ]}
+                  onPress={() => handleVote('down')}
+                  disabled={voteOnNoteMutation.isPending}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  accessibilityLabel="Downvote"
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: note.hasUserVoted === 'down', disabled: voteOnNoteMutation.isPending }}
+                >
+                  <Ionicons name="arrow-down" size={20} color={note.hasUserVoted === 'down' ? colors.surface : colors.error} />
+                  <Text style={[styles.voteText, { color: colors.textSecondary }, note.hasUserVoted === 'down' && styles.downvotedText]}>{note.downvotes}</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={[styles.navigateButton, { backgroundColor: colors.primary }]} onPress={handleNavigateToNote} accessibilityLabel="Navigate to this note" accessibilityRole="button">
+                  <Ionicons name="navigate" size={20} color={colors.surface} />
+                  <Text style={styles.navigateButtonText}>Navigate</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.bookmarkButton, isBookmarked && [styles.bookmarkedButton, { backgroundColor: colors.primary }]]}
+                  onPress={() => toggleBookmarkMutation.mutate(note)}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  accessibilityLabel={isBookmarked ? 'Remove bookmark' : 'Add bookmark'}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: !!isBookmarked }}
+                >
+                  <Ionicons name={isBookmarked ? 'bookmark' : 'bookmark-outline'} size={20} color={isBookmarked ? colors.surface : colors.textSecondary} />
+                </TouchableOpacity>
+
+                <View style={styles.commentCount}>
+                  <Ionicons name="chatbubble-outline" size={20} color={colors.textSecondary} />
+                  <Text style={[styles.commentCountText, { color: colors.textSecondary }]}>{note.commentsCount}</Text>
+                </View>
+              </View>
+            </View>
+
+            <View style={[styles.commentsSection, { backgroundColor: colors.surface }]}>
+              <Text style={[styles.commentsTitle, { color: colors.text }]}>Comments</Text>
+              {user && (
+                <View style={styles.addCommentContainer}>
+                  <TextInput
+                    style={[styles.commentInput, { borderColor: colors.border }]}
+                    placeholder="Add a comment..."
+                    value={commentText}
+                    onChangeText={setCommentText}
+                    multiline
+                    maxLength={280}
+                    accessibilityLabel="Comment text"
+                  />
+                  <TouchableOpacity
+                    style={[styles.addCommentButton, { backgroundColor: colors.primary }, !commentText.trim() && [styles.addCommentButtonDisabled, { backgroundColor: colors.textTertiary }]]}
+                    onPress={handleAddComment}
+                    disabled={addCommentMutation.isPending || !commentText.trim()}
+                    accessibilityLabel="Submit comment"
+                    accessibilityRole="button"
+                    accessibilityState={{ disabled: addCommentMutation.isPending || !commentText.trim() }}
+                  >
+                    {addCommentMutation.isPending ? (
+                      <ActivityIndicator size="small" color={colors.surface} />
+                    ) : (
+                      <Ionicons name="send" size={16} color={colors.surface} />
+                    )}
+                  </TouchableOpacity>
+                </View>
+              )}
+            </View>
+          </>
+        ), [note, colors, isOwner, handleDeleteNote, handleVote, voteOnNoteMutation, handleNavigateToNote, toggleBookmarkMutation, isBookmarked, user, commentText, addCommentMutation, handleAddComment])}
+        ListFooterComponent={allComments.length === 0 ? (
+          <View style={styles.noComments}>
+            <Ionicons name="chatbubble-outline" size={32} color={colors.textTertiary} />
+            <Text style={[styles.noCommentsText, { color: colors.textTertiary }]}>No comments yet</Text>
+          </View>
+        ) : hasNextPage ? (
+          <TouchableOpacity style={styles.loadMoreButton} onPress={() => fetchNextPage()} accessibilityLabel="Load more comments" accessibilityRole="button">
+            <Text style={[styles.loadMoreText, { color: colors.primary }]}>Load More Comments</Text>
+          </TouchableOpacity>
+        ) : null}
+        onEndReached={() => { if (hasNextPage) fetchNextPage(); }}
+        onEndReachedThreshold={0.5}
+        keyboardShouldPersistTaps="handled"
+        style={styles.scrollView}
+      />
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: colors.background,
   },
   center: {
     flex: 1,
@@ -267,11 +362,11 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   noteContainer: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     margin: 16,
     borderRadius: 12,
     padding: 16,
-    shadowColor: '#000',
+    shadowColor: colors.shadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
@@ -292,7 +387,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: '#e3f2fd',
+    backgroundColor: colors.primary + '20',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 12,
@@ -308,28 +403,41 @@ const styles = StyleSheet.create({
   username: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#333',
+    color: colors.text,
   },
   timestamp: {
     fontSize: 12,
-    color: '#666',
+    color: colors.textSecondary,
     marginTop: 2,
+  },
+  headerRight: {
+    alignItems: 'flex-end',
+    gap: 8,
+  },
+  expirationWarning: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    gap: 4,
+  },
+  expirationWarningText: {
+    fontSize: 10,
+    fontWeight: '500',
   },
   expiresText: {
     fontSize: 12,
-    color: '#f44336',
+    color: colors.error,
     fontWeight: '500',
+  },
+  deleteButton: {
+    padding: 4,
   },
   noteContent: {
     fontSize: 16,
-    color: '#333',
+    color: colors.text,
     lineHeight: 24,
-    marginBottom: 16,
-  },
-  noteImage: {
-    width: '100%',
-    height: 200,
-    borderRadius: 8,
     marginBottom: 16,
   },
   noteActions: {
@@ -344,27 +452,27 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     marginRight: 12,
     borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderColor: colors.border,
   },
   upvotedButton: {
-    backgroundColor: '#4CAF50',
-    borderColor: '#4CAF50',
+    backgroundColor: colors.success,
+    borderColor: colors.success,
   },
   downvotedButton: {
-    backgroundColor: '#f44336',
-    borderColor: '#f44336',
+    backgroundColor: colors.error,
+    borderColor: colors.error,
   },
   voteText: {
     marginLeft: 4,
     fontSize: 14,
     fontWeight: '500',
-    color: '#666',
+    color: colors.textSecondary,
   },
   upvotedText: {
-    color: '#fff',
+    color: colors.surface,
   },
   downvotedText: {
-    color: '#fff',
+    color: colors.surface,
   },
   commentCount: {
     flexDirection: 'row',
@@ -374,14 +482,44 @@ const styles = StyleSheet.create({
   commentCountText: {
     marginLeft: 4,
     fontSize: 14,
-    color: '#666',
+    color: colors.textSecondary,
+  },
+  navigateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.primary,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginRight: 12,
+  },
+  navigateButtonText: {
+    color: colors.surface,
+    fontSize: 14,
+    fontWeight: '600',
+    marginLeft: 6,
+  },
+  bookmarkButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginRight: 12,
+  },
+  bookmarkedButton: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
   },
   commentsSection: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     margin: 16,
+    marginTop: 0,
     borderRadius: 12,
     padding: 16,
-    shadowColor: '#000',
+    shadowColor: colors.shadow,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
     shadowRadius: 4,
@@ -390,7 +528,7 @@ const styles = StyleSheet.create({
   commentsTitle: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: '#333',
+    color: colors.text,
     marginBottom: 16,
   },
   addCommentContainer: {
@@ -401,7 +539,7 @@ const styles = StyleSheet.create({
   commentInput: {
     flex: 1,
     borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderColor: colors.border,
     borderRadius: 20,
     paddingHorizontal: 16,
     paddingVertical: 10,
@@ -409,7 +547,7 @@ const styles = StyleSheet.create({
     marginRight: 8,
   },
   addCommentButton: {
-    backgroundColor: '#2196F3',
+    backgroundColor: colors.primary,
     borderRadius: 20,
     width: 40,
     height: 40,
@@ -417,12 +555,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   addCommentButtonDisabled: {
-    backgroundColor: '#ccc',
+    backgroundColor: colors.textTertiary,
   },
   commentContainer: {
     paddingVertical: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    borderBottomColor: colors.border,
   },
   commentHeader: {
     flexDirection: 'row',
@@ -438,7 +576,7 @@ const styles = StyleSheet.create({
     width: 24,
     height: 24,
     borderRadius: 12,
-    backgroundColor: '#e3f2fd',
+    backgroundColor: colors.primary + '20',
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 8,
@@ -451,15 +589,23 @@ const styles = StyleSheet.create({
   commentUsername: {
     fontSize: 14,
     fontWeight: '600',
-    color: '#333',
+    color: colors.text,
+  },
+  commentHeaderRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   commentTimestamp: {
     fontSize: 12,
-    color: '#666',
+    color: colors.textSecondary,
+  },
+  commentDeleteButton: {
+    padding: 8,
   },
   commentContent: {
     fontSize: 14,
-    color: '#333',
+    color: colors.text,
     lineHeight: 20,
   },
   loadMoreButton: {
@@ -469,7 +615,16 @@ const styles = StyleSheet.create({
     marginTop: 16,
   },
   loadMoreText: {
-    color: '#2196F3',
+    color: colors.primary,
     fontSize: 16,
+  },
+  noComments: {
+    alignItems: 'center',
+    paddingVertical: 24,
+  },
+  noCommentsText: {
+    fontSize: 14,
+    color: colors.textTertiary,
+    marginTop: 8,
   },
 });

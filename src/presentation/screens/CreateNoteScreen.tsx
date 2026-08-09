@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -10,78 +10,102 @@ import {
   Platform,
   ScrollView,
   ActivityIndicator,
-  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import { useHeaderHeight } from '@react-navigation/elements';
 import { StackNavigationProp } from '@react-navigation/stack';
-import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
 import { RootStackParamList } from '../navigation/AppNavigator';
 import { useCreateNote } from '../hooks/useNotes';
 import { useAppStore } from '../store/appStore';
+import { useSettingsStore } from '../store/settingsStore';
 import { locationService } from '../../utils/locationService';
+import { DraftService } from '../../utils/drafts';
+import { useTheme } from '../hooks/useTheme';
+import { ThemeColors } from '../../utils/theme';
+import { useDebounce } from '../hooks/useDebounce';
 
 type CreateNoteScreenNavigationProp = StackNavigationProp<RootStackParamList, 'CreateNote'>;
 type CreateNoteScreenRouteProp = RouteProp<RootStackParamList, 'CreateNote'>;
 
 export const CreateNoteScreen: React.FC = () => {
+  const { colors } = useTheme();
   const navigation = useNavigation<CreateNoteScreenNavigationProp>();
   const route = useRoute<CreateNoteScreenRouteProp>();
   const { location } = useAppStore();
-  
+  const headerHeight = useHeaderHeight();
+  const { defaultExpirationDays } = useSettingsStore();
+  const draftService = DraftService.getInstance();
+
   const [content, setContent] = useState('');
-  const [imageUri, setImageUri] = useState<string | null>(null);
-  const [expiresInDays, setExpiresInDays] = useState('7');
-  
+  const [expiresInDays, setExpiresInDays] = useState(String(defaultExpirationDays));
+  const [category, setCategory] = useState<string | undefined>(undefined);
+  const [draftId, setDraftId] = useState<string | undefined>(undefined);
+  const [isSavingDraft, setIsSavingDraft] = useState(false);
+
   const createNoteMutation = useCreateNote();
+  const debouncedContent = useDebounce(content, 2000);
 
-  const handleImagePicker = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Required', 'Camera roll permissions are needed to select images.');
-      return;
-    }
+  // Auto-save draft when content changes
+  React.useEffect(() => {
+    const autoSaveDraft = async () => {
+      if (debouncedContent.trim().length > 0 && !createNoteMutation.isPending) {
+        setIsSavingDraft(true);
+        try {
+          const noteLocation = route.params?.latitude != null && route.params?.longitude != null
+            ? { latitude: route.params.latitude, longitude: route.params.longitude }
+            : location.latitude != null && location.longitude != null
+            ? { latitude: location.latitude, longitude: location.longitude }
+            : undefined;
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.8,
-    });
+          const id = await draftService.saveDraft({
+            content: debouncedContent,
+            expiresInDays: parseInt(expiresInDays) || 7,
+            location: noteLocation,
+            category,
+          });
+          setDraftId(id);
+        } catch (error) {
+          console.error('[CreateNote] Auto-save draft failed:', error);
+        } finally {
+          setIsSavingDraft(false);
+        }
+      }
+    };
 
-    if (!result.canceled && result.assets[0]) {
-      setImageUri(result.assets[0].uri);
+    void autoSaveDraft();
+  }, [debouncedContent, expiresInDays, category, route.params, location]);
+
+  const loadDraft = async (id: string) => {
+    try {
+      const draft = await draftService.getDraft(id);
+      if (draft) {
+        setContent(draft.content);
+        if (draft.category) setCategory(draft.category);
+        if (draft.expiresInDays) setExpiresInDays(String(draft.expiresInDays));
+        await draftService.deleteDraft(id);
+      }
+    } catch (error) {
+      console.error('Failed to load draft:', error);
     }
   };
 
-  const handleCamera = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Required', 'Camera permissions are needed to take photos.');
-      return;
+  React.useEffect(() => {
+    if (route.params?.draftId) {
+      loadDraft(route.params.draftId);
     }
+  }, [route.params?.draftId]);
 
-    const result = await ImagePicker.launchCameraAsync({
-      allowsEditing: true,
-      aspect: [4, 3],
-      quality: 0.8,
-    });
-
-    if (!result.canceled && result.assets[0]) {
-      setImageUri(result.assets[0].uri);
-    }
-  };
-
-  const handleCreateNote = async () => {
+  const handleCreateNote = useCallback(async () => {
     if (!content.trim()) {
       Alert.alert('Error', 'Please enter note content');
       return;
     }
 
-    const noteLocation = route.params?.latitude && route.params?.longitude 
+    const noteLocation = route.params?.latitude != null && route.params?.longitude != null
       ? { latitude: route.params.latitude, longitude: route.params.longitude }
-      : location.latitude && location.longitude
+      : location.latitude != null && location.longitude != null
       ? { latitude: location.latitude, longitude: location.longitude }
       : null;
 
@@ -99,7 +123,6 @@ export const CreateNoteScreen: React.FC = () => {
     try {
       await createNoteMutation.mutateAsync({
         content: content.trim(),
-        imageUri: imageUri || undefined,
         location: noteLocation,
         expiresInDays: days,
       });
@@ -107,16 +130,12 @@ export const CreateNoteScreen: React.FC = () => {
       Alert.alert('Success', 'Note created successfully!', [
         { text: 'OK', onPress: () => navigation.goBack() }
       ]);
-    } catch (error: any) {
-      Alert.alert('Error', error.message);
+    } catch (error: unknown) {
+      Alert.alert('Error', error instanceof Error ? error.message : 'An error occurred');
     }
-  };
+  }, [content, location, route.params, expiresInDays, createNoteMutation, navigation]);
 
-  const removeImage = () => {
-    setImageUri(null);
-  };
-
-  const getCurrentLocation = async () => {
+  const getCurrentLocation = useCallback(async () => {
     try {
       const currentLocation = await locationService.getCurrentLocation();
       if (currentLocation) {
@@ -127,17 +146,28 @@ export const CreateNoteScreen: React.FC = () => {
     } catch (error) {
       Alert.alert('Error', 'Failed to get current location');
     }
-  };
+  }, [createNoteMutation.isPending]);
+
+  const styles = createStyles(colors);
 
   return (
     <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        keyboardVerticalOffset={headerHeight}
         style={styles.container}
       >
         <ScrollView style={styles.scrollView} contentContainerStyle={styles.scrollContent}>
           <View style={styles.form}>
-            <Text style={styles.label}>Note Content *</Text>
+            <View style={styles.formHeader}>
+              <Text style={styles.label}>Note Content *</Text>
+              {isSavingDraft && (
+                <View style={styles.autoSaveIndicator}>
+                  <ActivityIndicator size="small" color={colors.textTertiary} />
+                  <Text style={[styles.autoSaveText, { color: colors.textTertiary }]}>Saving...</Text>
+                </View>
+              )}
+            </View>
             <TextInput
               style={styles.textArea}
               placeholder="What's happening around here?"
@@ -148,36 +178,16 @@ export const CreateNoteScreen: React.FC = () => {
               maxLength={500}
               editable={!createNoteMutation.isPending}
             />
-            <Text style={styles.characterCount}>{content.length}/500</Text>
-
-            <Text style={styles.label}>Photo (Optional)</Text>
-            {imageUri ? (
-              <View style={styles.imageContainer}>
-                <Image source={{ uri: imageUri }} style={styles.image} />
-                <TouchableOpacity style={styles.removeImageButton} onPress={removeImage}>
-                  <Ionicons name="close" size={20} color="#fff" />
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <View style={styles.imageButtons}>
-                <TouchableOpacity
-                  style={styles.imageButton}
-                  onPress={handleCamera}
-                  disabled={createNoteMutation.isPending}
-                >
-                  <Ionicons name="camera" size={24} color="#2196F3" />
-                  <Text style={styles.imageButtonText}>Camera</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.imageButton}
-                  onPress={handleImagePicker}
-                  disabled={createNoteMutation.isPending}
-                >
-                  <Ionicons name="image" size={24} color="#2196F3" />
-                  <Text style={styles.imageButtonText}>Gallery</Text>
-                </TouchableOpacity>
-              </View>
-            )}
+            <View style={styles.characterCountContainer}>
+              <Text style={[
+                styles.characterCount,
+                content.length > 450 && styles.characterCountWarning,
+                content.length > 480 && styles.characterCountDanger,
+              ]}>{content.length}/500</Text>
+              {content.length > 450 && (
+                <Ionicons name="warning-outline" size={14} color={content.length > 480 ? colors.error : colors.warning} />
+              )}
+            </View>
 
             <Text style={styles.label}>Expires in (days)</Text>
             <TextInput
@@ -190,23 +200,25 @@ export const CreateNoteScreen: React.FC = () => {
             />
 
             <View style={styles.locationInfo}>
-              <Ionicons name="location" size={16} color="#666" />
+              <Ionicons name="location" size={16} color={colors.textSecondary} />
               <Text style={styles.locationText}>
-                {route.params?.latitude && route.params?.longitude
+                {route.params?.latitude != null && route.params?.longitude != null
                   ? `Custom location: ${route.params.latitude.toFixed(4)}, ${route.params.longitude.toFixed(4)}`
-                  : location.latitude && location.longitude
+                  : location.latitude != null && location.longitude != null
                   ? `Current location: ${location.latitude.toFixed(4)}, ${location.longitude.toFixed(4)}`
                   : 'No location available'}
               </Text>
             </View>
 
-            {!route.params?.latitude && !route.params?.longitude && (
+            {route.params?.latitude === null && route.params?.longitude === null && (
               <TouchableOpacity
                 style={styles.locationButton}
                 onPress={getCurrentLocation}
                 disabled={createNoteMutation.isPending}
+                accessibilityLabel="Use current location"
+                accessibilityRole="button"
               >
-                <Ionicons name="locate" size={20} color="#2196F3" />
+                <Ionicons name="locate" size={20} color={colors.primary} />
                 <Text style={styles.locationButtonText}>Use Current Location</Text>
               </TouchableOpacity>
             )}
@@ -218,6 +230,8 @@ export const CreateNoteScreen: React.FC = () => {
             style={[styles.button, styles.cancelButton]}
             onPress={() => navigation.goBack()}
             disabled={createNoteMutation.isPending}
+            accessibilityLabel="Cancel note creation"
+            accessibilityRole="button"
           >
             <Text style={styles.cancelButtonText}>Cancel</Text>
           </TouchableOpacity>
@@ -226,9 +240,12 @@ export const CreateNoteScreen: React.FC = () => {
             style={[styles.button, styles.createButton]}
             onPress={handleCreateNote}
             disabled={createNoteMutation.isPending || !content.trim()}
+            accessibilityLabel="Create note"
+            accessibilityRole="button"
+            accessibilityState={{ disabled: createNoteMutation.isPending || !content.trim() }}
           >
             {createNoteMutation.isPending ? (
-              <ActivityIndicator color="#fff" size="small" />
+              <ActivityIndicator color={colors.surface} size="small" />
             ) : (
               <Text style={styles.createButtonText}>Create Note</Text>
             )}
@@ -239,10 +256,10 @@ export const CreateNoteScreen: React.FC = () => {
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: colors.background,
   },
   scrollView: {
     flex: 1,
@@ -256,83 +273,78 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 16,
     fontWeight: '500',
-    color: '#333',
+    color: colors.text,
     marginBottom: 8,
     marginTop: 16,
   },
+  formHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+    marginTop: 16,
+  },
+  autoSaveIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  autoSaveText: {
+    fontSize: 12,
+    fontStyle: 'italic',
+  },
   textArea: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     borderRadius: 8,
     padding: 16,
     fontSize: 16,
     borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderColor: colors.border,
     height: 100,
     textAlignVertical: 'top',
   },
   input: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     borderRadius: 8,
     padding: 16,
     fontSize: 16,
     borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderColor: colors.border,
   },
   characterCount: {
     textAlign: 'right',
-    color: '#666',
+    color: colors.textSecondary,
     fontSize: 12,
     marginTop: 4,
+    marginRight: 4,
   },
-  imageContainer: {
-    position: 'relative',
-    marginBottom: 16,
-  },
-  image: {
-    width: '100%',
-    height: 200,
-    borderRadius: 8,
-  },
-  removeImageButton: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 15,
-    width: 30,
-    height: 30,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  imageButtons: {
+  characterCountContainer: {
     flexDirection: 'row',
-    gap: 16,
-  },
-  imageButton: {
-    flex: 1,
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    padding: 20,
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
+    justifyContent: 'flex-end',
+    gap: 4,
+    marginTop: 4,
+    marginBottom: 8,
   },
-  imageButtonText: {
-    color: '#2196F3',
-    marginTop: 8,
-    fontSize: 14,
+  characterCountWarning: {
+    color: '#fbc02d',
+    fontWeight: '600',
+  },
+  characterCountDanger: {
+    color: colors.error,
+    fontWeight: '700',
   },
   locationInfo: {
     flexDirection: 'row',
     alignItems: 'center',
     marginTop: 16,
     padding: 12,
-    backgroundColor: '#e3f2fd',
+    backgroundColor: colors.primary + '20',
     borderRadius: 8,
   },
   locationText: {
     marginLeft: 8,
-    color: '#666',
+    color: colors.textSecondary,
     fontSize: 14,
   },
   locationButton: {
@@ -340,15 +352,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     padding: 12,
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#2196F3',
+    borderColor: colors.primary,
     marginTop: 8,
   },
   locationButtonText: {
     marginLeft: 8,
-    color: '#2196F3',
+    color: colors.primary,
     fontSize: 16,
   },
   footer: {
@@ -363,20 +375,20 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   cancelButton: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderColor: colors.border,
   },
   cancelButtonText: {
-    color: '#666',
+    color: colors.textSecondary,
     fontSize: 16,
     fontWeight: '500',
   },
   createButton: {
-    backgroundColor: '#2196F3',
+    backgroundColor: colors.primary,
   },
   createButtonText: {
-    color: '#fff',
+    color: colors.surface,
     fontSize: 16,
     fontWeight: 'bold',
   },

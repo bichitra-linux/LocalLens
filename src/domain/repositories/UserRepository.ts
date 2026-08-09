@@ -10,4 +10,5 @@ export interface UserRepository {
   signUpWithEmail(email: string, password: string, userData: CreateUserRequest): Promise<User>;
   signInWithGoogle(): Promise<User>;
   signOut(): Promise<void>;
+  createAnonymousUser(uid: string): Promise<User>;
 }

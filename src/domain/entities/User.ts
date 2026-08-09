@@ -8,9 +8,12 @@ export interface User {
   lastActiveAt: Date;
   notesCount: number;
   votesCount: number;
+  reputationLevel?: number;
+  achievementsCount?: number;
 }
 
 export interface CreateUserRequest {
+  id?: string;
   username: string;
   email: string;
   displayName: string;

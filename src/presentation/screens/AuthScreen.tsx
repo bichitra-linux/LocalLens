@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,9 +12,11 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Ionicons } from '@expo/vector-icons';
+import { useHeaderHeight } from '@react-navigation/elements';
 import { useSignInWithEmail, useSignUpWithEmail, useSignInWithGoogle } from '../hooks/useAuth';
-import { DEV_MODE, DUMMY_USERS } from '../../utils/devHelpers';
-import { DevAuthHelpers } from '../../utils/devAuthHelpers';
+import { useTheme } from '../hooks/useTheme';
+import { ThemeColors } from '../../utils/theme';
 
 export const AuthScreen: React.FC = () => {
   const [isSignUp, setIsSignUp] = useState(false);
@@ -23,14 +25,41 @@ export const AuthScreen: React.FC = () => {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [username, setUsername] = useState('');
   const [displayName, setDisplayName] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
 
+  const { colors } = useTheme();
+  const headerHeight = useHeaderHeight();
   const signInMutation = useSignInWithEmail();
   const signUpMutation = useSignUpWithEmail();
   const googleSignInMutation = useSignInWithGoogle();
 
   const isLoading = signInMutation.isPending || signUpMutation.isPending || googleSignInMutation.isPending;
 
-  const handleEmailAuth = async () => {
+  const getPasswordStrength = (pwd: string): { strength: number; label: string; color: string } => {
+    if (!pwd) return { strength: 0, label: '', color: 'transparent' };
+    
+    let strength = 0;
+    if (pwd.length >= 8) strength++;
+    if (pwd.length >= 12) strength++;
+    if (/[a-z]/.test(pwd) && /[A-Z]/.test(pwd)) strength++;
+    if (/\d/.test(pwd)) strength++;
+    if (/[^a-zA-Z0-9]/.test(pwd)) strength++;
+
+    const strengthLevels = [
+      { label: 'Very Weak', color: '#e53935' },
+      { label: 'Weak', color: '#ef6c00' },
+      { label: 'Fair', color: '#fbc02d' },
+      { label: 'Good', color: '#7cb342' },
+      { label: 'Strong', color: '#2e7d32' },
+    ];
+
+    const levelIndex = Math.min(strength, 4);
+    return { strength, label: strengthLevels[levelIndex].label, color: strengthLevels[levelIndex].color };
+  };
+
+  const passwordStrength = getPasswordStrength(password);
+
+  const handleEmailAuth = useCallback(async () => {
     if (!email || !password) {
       Alert.alert('Error', 'Please enter email and password');
       return;
@@ -57,101 +86,58 @@ export const AuthScreen: React.FC = () => {
             displayName,
           },
         });
-      } catch (error: any) {
-        Alert.alert('Sign Up Failed', error.message);
+      } catch (error: unknown) {
+        Alert.alert('Sign Up Failed', error instanceof Error ? error.message : 'An error occurred');
       }
     } else {
       try {
         await signInMutation.mutateAsync({ email, password });
-      } catch (error: any) {
-        Alert.alert('Sign In Failed', error.message);
+      } catch (error: unknown) {
+        Alert.alert('Sign In Failed', error instanceof Error ? error.message : 'An error occurred');
       }
     }
-  };
+  }, [email, password, isSignUp, confirmPassword, username, displayName, signInMutation, signUpMutation]);
 
-  const handleGoogleSignIn = async () => {
+  const handleGoogleSignIn = useCallback(async () => {
     try {
       await googleSignInMutation.mutateAsync();
-    } catch (error: any) {
-      Alert.alert('Google Sign In Failed', error.message);
+    } catch (error: unknown) {
+      Alert.alert('Google Sign In Failed', error instanceof Error ? error.message : 'An error occurred');
     }
-  };
+  }, [googleSignInMutation]);
 
-  // Anonymous sign-in for quick testing
-  const handleAnonymousLogin = async () => {
-    try {
-      console.log('👤 Attempting anonymous login...');
-      await DevAuthHelpers.signInAnonymous();
-      console.log('✅ Anonymous login successful!');
-    } catch (error: any) {
-      console.error('Anonymous login failed:', error);
-      Alert.alert(
-        'Anonymous Login Failed',
-        'Could not sign in anonymously. Please try manual login.',
-        [{ text: 'OK' }]
-      );
-    }
-  };
-
-  const handleDummyLogin = async (userKey: 'testUser1' | 'testUser2') => {
-    try {
-      // Use the new DevAuthHelpers for more reliable dummy login
-      const dummyUsers = DevAuthHelpers.getDummyUsers();
-      const userIndex = userKey === 'testUser1' ? 0 : 1;
-      const selectedUser = dummyUsers[userIndex];
-      
-      if (selectedUser) {
-        console.log('🎭 Attempting dummy login for:', selectedUser.name);
-        await DevAuthHelpers.signInMockUser(selectedUser.email);
-        console.log('✅ Dummy login successful!');
-      } else {
-        // Fallback to original method
-        const dummyUser = DUMMY_USERS[userKey];
-        setEmail(dummyUser.email);
-        setPassword(dummyUser.password);
-        
-        await signInMutation.mutateAsync({
-          email: dummyUser.email,
-          password: dummyUser.password,
-        });
-      }
-    } catch (error: any) {
-      console.error('Dummy login failed:', error);
-      Alert.alert(
-        'Development Login',
-        'Quick login failed. The development server might still be initializing dummy users. Try again in a moment or use manual login.',
-        [{ text: 'OK' }]
-      );
-    }
-  };
-
-  const toggleMode = () => {
+  const toggleMode = useCallback(() => {
     setIsSignUp(!isSignUp);
     setEmail('');
     setPassword('');
     setConfirmPassword('');
     setUsername('');
     setDisplayName('');
-  };
+  }, [isSignUp]);
+
+  const styles = createStyles(colors);
 
   return (
-    <SafeAreaView style={styles.container}>
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
       <KeyboardAvoidingView
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.container}
+        keyboardVerticalOffset={headerHeight}
+        style={[styles.container, { backgroundColor: colors.background }]}
       >
         <ScrollView contentContainerStyle={styles.scrollContainer}>
           <View style={styles.header}>
-            <Text style={styles.title}>LocalLens</Text>
-            <Text style={styles.subtitle}>
+            <Text style={[styles.title, { color: colors.primary }]}>LocalLens</Text>
+            <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
               Discover and share moments in your neighborhood
             </Text>
           </View>
 
           <View style={styles.form}>
+            <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>Email</Text>
             <TextInput
-              style={styles.input}
+              style={[styles.input, { backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }]}
               placeholder="Email"
+              placeholderTextColor={colors.textTertiary}
               value={email}
               onChangeText={setEmail}
               keyboardType="email-address"
@@ -159,38 +145,64 @@ export const AuthScreen: React.FC = () => {
               editable={!isLoading}
             />
 
-            <TextInput
-              style={styles.input}
-              placeholder="Password"
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-              editable={!isLoading}
-            />
+            <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>Password</Text>
+            <View style={styles.passwordInputContainer}>
+              <TextInput
+                style={[styles.input, { backgroundColor: colors.surface, borderColor: colors.border, color: colors.text, flex: 1 }]}
+                placeholder="Password"
+                placeholderTextColor={colors.textTertiary}
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry={!showPassword}
+                editable={!isLoading}
+              />
+              <TouchableOpacity
+                style={styles.showPasswordButton}
+                onPress={() => setShowPassword(!showPassword)}
+                accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+                accessibilityRole="button"
+              >
+                <Ionicons name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={20} color={colors.textSecondary} />
+              </TouchableOpacity>
+            </View>
+            {isSignUp && password.length > 0 && (
+              <View style={styles.passwordStrengthContainer}>
+                <View style={styles.passwordStrengthBar}>
+                  <View style={[styles.passwordStrengthFill, { width: `${(passwordStrength.strength / 5) * 100}%`, backgroundColor: passwordStrength.color }]} />
+                </View>
+                <Text style={[styles.passwordStrengthText, { color: passwordStrength.color }]}>{passwordStrength.label}</Text>
+              </View>
+            )}
 
             {isSignUp && (
               <>
+                <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>Confirm Password</Text>
                 <TextInput
-                  style={styles.input}
+                  style={[styles.input, { backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }]}
                   placeholder="Confirm Password"
+                  placeholderTextColor={colors.textTertiary}
                   value={confirmPassword}
                   onChangeText={setConfirmPassword}
                   secureTextEntry
                   editable={!isLoading}
                 />
 
+                <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>Username</Text>
                 <TextInput
-                  style={styles.input}
+                  style={[styles.input, { backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }]}
                   placeholder="Username"
+                  placeholderTextColor={colors.textTertiary}
                   value={username}
                   onChangeText={setUsername}
                   autoCapitalize="none"
                   editable={!isLoading}
                 />
 
+                <Text style={[styles.inputLabel, { color: colors.textSecondary }]}>Display Name</Text>
                 <TextInput
-                  style={styles.input}
+                  style={[styles.input, { backgroundColor: colors.surface, borderColor: colors.border, color: colors.text }]}
                   placeholder="Display Name"
+                  placeholderTextColor={colors.textTertiary}
                   value={displayName}
                   onChangeText={setDisplayName}
                   editable={!isLoading}
@@ -199,12 +211,15 @@ export const AuthScreen: React.FC = () => {
             )}
 
             <TouchableOpacity
-              style={[styles.button, styles.primaryButton]}
+              style={[styles.button, styles.primaryButton, { backgroundColor: colors.primary }]}
               onPress={handleEmailAuth}
               disabled={isLoading}
+              accessibilityLabel={isSignUp ? 'Sign up' : 'Sign in'}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: isLoading }}
             >
               {isLoading ? (
-                <ActivityIndicator color="#fff" />
+                <ActivityIndicator color={colors.surface} />
               ) : (
                 <Text style={styles.buttonText}>
                   {isSignUp ? 'Sign Up' : 'Sign In'}
@@ -213,11 +228,14 @@ export const AuthScreen: React.FC = () => {
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={[styles.button, styles.googleButton]}
+              style={[styles.button, styles.googleButton, { backgroundColor: colors.surface, borderColor: colors.border }]}
               onPress={handleGoogleSignIn}
               disabled={isLoading}
+              accessibilityLabel="Continue with Google"
+              accessibilityRole="button"
+              accessibilityState={{ disabled: isLoading }}
             >
-              <Text style={styles.googleButtonText}>
+              <Text style={[styles.googleButtonText, { color: colors.text }]}>
                 Continue with Google
               </Text>
             </TouchableOpacity>
@@ -226,47 +244,16 @@ export const AuthScreen: React.FC = () => {
               style={styles.linkButton}
               onPress={toggleMode}
               disabled={isLoading}
+              accessibilityLabel={isSignUp ? 'Switch to sign in' : 'Switch to sign up'}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: isLoading }}
             >
-              <Text style={styles.linkText}>
+              <Text style={[styles.linkText, { color: colors.primary }]}>
                 {isSignUp
                   ? 'Already have an account? Sign In'
                   : 'Need an account? Sign Up'}
               </Text>
             </TouchableOpacity>
-
-            {/* Development Dummy Users - Only show in dev mode */}
-            {DEV_MODE && !isSignUp && (
-              <View style={styles.devSection}>
-                <Text style={styles.devTitle}>🚀 Quick Login (Dev Only)</Text>
-                <TouchableOpacity
-                  style={[styles.button, styles.devButton, { backgroundColor: '#FF6B6B' }]}
-                  onPress={handleAnonymousLogin}
-                  disabled={isLoading}
-                >
-                  <Text style={styles.devButtonText}>
-                    ⚡ Anonymous Login
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.button, styles.devButton]}
-                  onPress={() => handleDummyLogin('testUser1')}
-                  disabled={isLoading}
-                >
-                  <Text style={styles.devButtonText}>
-                    👩‍💻 Alice Developer
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.button, styles.devButton]}
-                  onPress={() => handleDummyLogin('testUser2')}
-                  disabled={isLoading}
-                >
-                  <Text style={styles.devButtonText}>
-                    👨‍🔬 Bob Tester
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            )}
           </View>
         </ScrollView>
       </KeyboardAvoidingView>
@@ -274,10 +261,10 @@ export const AuthScreen: React.FC = () => {
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: colors.background,
   },
   scrollContainer: {
     flexGrow: 1,
@@ -291,26 +278,64 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 32,
     fontWeight: 'bold',
-    color: '#2196F3',
+    color: colors.primary,
     marginBottom: 8,
   },
   subtitle: {
     fontSize: 16,
-    color: '#666',
+    color: colors.textSecondary,
     textAlign: 'center',
     paddingHorizontal: 20,
   },
   form: {
     width: '100%',
   },
+  inputLabel: {
+    fontSize: 14,
+    fontWeight: '500',
+    marginBottom: 4,
+  },
+  passwordInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 4,
+  },
+  showPasswordButton: {
+    padding: 8,
+    marginLeft: 4,
+  },
+  passwordStrengthContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    paddingHorizontal: 4,
+  },
+  passwordStrengthBar: {
+    flex: 1,
+    height: 3,
+    backgroundColor: '#e0e0e0',
+    borderRadius: 2,
+    overflow: 'hidden',
+    marginRight: 8,
+  },
+  passwordStrengthFill: {
+    height: '100%',
+    borderRadius: 2,
+  },
+  passwordStrengthText: {
+    fontSize: 11,
+    fontWeight: '500',
+    width: 60,
+    textAlign: 'right',
+  },
   input: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     borderRadius: 8,
     padding: 16,
-    marginBottom: 16,
+    marginBottom: 12,
     fontSize: 16,
     borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderColor: colors.border,
   },
   button: {
     borderRadius: 8,
@@ -319,20 +344,20 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   primaryButton: {
-    backgroundColor: '#2196F3',
+    backgroundColor: colors.primary,
   },
   googleButton: {
-    backgroundColor: '#fff',
+    backgroundColor: colors.surface,
     borderWidth: 1,
-    borderColor: '#e0e0e0',
+    borderColor: colors.border,
   },
   buttonText: {
-    color: '#fff',
+    color: colors.surface,
     fontSize: 16,
     fontWeight: 'bold',
   },
   googleButtonText: {
-    color: '#333',
+    color: colors.text,
     fontSize: 16,
     fontWeight: '500',
   },
@@ -341,31 +366,7 @@ const styles = StyleSheet.create({
     padding: 16,
   },
   linkText: {
-    color: '#2196F3',
+    color: colors.primary,
     fontSize: 16,
-  },
-  devSection: {
-    marginTop: 20,
-    padding: 16,
-    backgroundColor: '#f0f0f0',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#ddd',
-  },
-  devTitle: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: '#666',
-    textAlign: 'center',
-    marginBottom: 12,
-  },
-  devButton: {
-    backgroundColor: '#FF9800',
-    marginBottom: 8,
-  },
-  devButtonText: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: 'bold',
   },
 });

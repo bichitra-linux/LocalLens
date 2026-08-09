@@ -1,58 +1,159 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { View, StyleSheet, Alert, ActivityIndicator, Platform } from 'react-native';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { View, StyleSheet, Alert, ActivityIndicator, Platform, Text, TouchableOpacity } from 'react-native';
 import { useAppStore } from '../store/appStore';
+import { Ionicons } from '@expo/vector-icons';
 import { useNearbyNotes, useNearbyNotesListener } from '../hooks/useNotes';
 import { locationService } from '../../utils/locationService';
+import { getMapStyle } from '../../utils/mapConfig';
+import { calculateDistance } from '../../utils/geospatial';
 import { Note } from '../../domain/entities/Note';
+import { useTheme } from '../hooks/useTheme';
+import { ThemeColors } from '../../utils/theme';
 
-// Import map components conditionally - Platform check happens at runtime
-let MapView: any, Marker: any, UrlTile: any;
-let MapContainer: any, TileLayer: any, LeafletMarker: any, Popup: any;
+let MapLibreGL: typeof import('@maplibre/maplibre-react-native').default | null = null;
 
 const initializeMapComponents = () => {
-  if (Platform.OS !== 'web') {
-    // Import react-native-maps only for native platforms
-    try {
-      const mapComponents = require('react-native-maps');
-      MapView = mapComponents.default;
-      Marker = mapComponents.Marker;
-      UrlTile = mapComponents.UrlTile; // For OpenStreetMap tiles
-    } catch (error) {
-      console.warn('react-native-maps not available:', error);
-    }
-  } else {
-    // Import leaflet components for web
-    try {
-      const leafletComponents = require('react-leaflet');
-      MapContainer = leafletComponents.MapContainer;
-      TileLayer = leafletComponents.TileLayer;
-      LeafletMarker = leafletComponents.Marker;
-      Popup = leafletComponents.Popup;
-    } catch (e) {
-      console.warn('Leaflet components not available:', e);
-    }
+  try {
+    MapLibreGL = require('@maplibre/maplibre-react-native').default;
+  } catch (error) {
+    console.warn('@maplibre/maplibre-react-native not available:', error);
   }
 };
+
+interface Cluster {
+  notes: Note[];
+  latitude: number;
+  longitude: number;
+}
 
 interface MapScreenProps {
   onNotePress?: (note: Note) => void;
   onMapPress?: (coordinate: { latitude: number; longitude: number }) => void;
+  routeGeometry?: GeoJSON.Feature<GeoJSON.LineString> | null;
 }
 
-export const MapScreen: React.FC<MapScreenProps> = ({ onNotePress, onMapPress }) => {
-  const mapRef = useRef<any>(null);
-  const { location, isMapReady, setMapReady, setSelectedNote } = useAppStore();
-  const [region, setRegion] = useState<any | null>(null);
-  const [componentsInitialized, setComponentsInitialized] = useState(false);
+const clusterNotes = (notes: Note[], radiusKm: number = 5): Cluster[] => {
+  if (notes.length === 0) return [];
 
-  // Use the real-time listener for live updates
+  const clusters: Cluster[] = [];
+  const assigned = new Set<string>();
+
+  for (const note of notes) {
+    if (assigned.has(note.id)) continue;
+
+    const cluster: Cluster = {
+      notes: [note],
+      latitude: note.location.latitude,
+      longitude: note.location.longitude,
+    };
+    assigned.add(note.id);
+
+    for (const other of notes) {
+      if (assigned.has(other.id)) continue;
+
+      const distance = calculateDistance(
+        note.location.latitude,
+        note.location.longitude,
+        other.location.latitude,
+        other.location.longitude
+      );
+
+      if (distance <= radiusKm) {
+        cluster.notes.push(other);
+        assigned.add(other.id);
+      }
+    }
+
+    if (cluster.notes.length > 1) {
+      cluster.latitude =
+        cluster.notes.reduce((sum, n) => sum + n.location.latitude, 0) / cluster.notes.length;
+      cluster.longitude =
+        cluster.notes.reduce((sum, n) => sum + n.location.longitude, 0) / cluster.notes.length;
+    }
+
+    clusters.push(cluster);
+  }
+
+  return clusters;
+};
+
+const notesToGeoJSON = (clusters: Cluster[]): GeoJSON.FeatureCollection => ({
+  type: 'FeatureCollection',
+  features: clusters.map((cluster) => ({
+    type: 'Feature',
+    geometry: {
+      type: 'Point',
+      coordinates: [cluster.longitude, cluster.latitude],
+    },
+    properties: {
+      id: cluster.notes.length > 1
+        ? `cluster-${cluster.latitude.toFixed(4)}-${cluster.longitude.toFixed(4)}`
+        : cluster.notes[0].id,
+      isCluster: cluster.notes.length > 1,
+      count: cluster.notes.length,
+      title: cluster.notes.length > 1
+        ? `${cluster.notes.length} notes`
+        : cluster.notes[0].username,
+      description: cluster.notes.length > 1
+        ? 'Tap to explore nearby notes'
+        : cluster.notes[0].content.substring(0, 50) +
+          (cluster.notes[0].content.length > 50 ? '...' : ''),
+      noteId: cluster.notes.length === 1 ? cluster.notes[0].id : null,
+      color: cluster.notes.length > 1
+        ? '#9C27B0'
+        : cluster.notes[0].hasUserVoted === 'up'
+          ? '#4CAF50'
+          : cluster.notes[0].hasUserVoted === 'down'
+            ? '#f44336'
+            : '#2196F3',
+    },
+  })),
+});
+
+const markerStyle = {
+  textField: ['get', 'title'],
+  textSize: 12,
+  textColor: '#ffffff',
+  textHaloColor: '#000000',
+  textHaloWidth: 1,
+  textOffset: [0, -2],
+  textAnchor: 'bottom',
+  iconImage: 'marker-15',
+  iconSize: 1.5,
+  iconColor: ['get', 'color'],
+};
+
+const clusterStyle = {
+  textField: ['get', 'count'],
+  textSize: 14,
+  textColor: '#ffffff',
+  textHaloColor: '#9C27B0',
+  textHaloWidth: 2,
+  textAnchor: 'center',
+  circleRadius: 18,
+  circleColor: '#9C27B0',
+  circleStrokeWidth: 2,
+  circleStrokeColor: '#ffffff',
+};
+
+const routeStyle = {
+  lineColor: '#2196F3',
+  lineWidth: 4,
+  lineOpacity: 0.8,
+};
+
+export const MapScreen: React.FC<MapScreenProps> = ({ onNotePress, onMapPress, routeGeometry }) => {
+  const { location, isMapReady, setMapReady } = useAppStore();
+  const { colors } = useTheme();
+  const [region, setRegion] = useState<{ latitude: number; longitude: number } | null>(null);
+  const [componentsInitialized, setComponentsInitialized] = useState(false);
+  const mapRef = useRef<any>(null);
+
   useNearbyNotesListener();
-  
-  // Also use the paginated query for initial load and manual refresh
+
   const { data: notesData, isLoading } = useNearbyNotes();
 
-  // Get all notes from all pages
-  const allNotes = notesData?.pages.flatMap(page => page.data) ?? [];
+  const allNotes = notesData?.pages.flatMap((page) => page.data) ?? [];
 
   useEffect(() => {
     initializeMapComponents();
@@ -61,26 +162,18 @@ export const MapScreen: React.FC<MapScreenProps> = ({ onNotePress, onMapPress })
   }, []);
 
   useEffect(() => {
-    if (location.latitude && location.longitude && mapRef.current && !region) {
-      const initialRegion = {
+    if (location.latitude !== null && location.longitude !== null && !region) {
+      setRegion({
         latitude: location.latitude,
         longitude: location.longitude,
-        latitudeDelta: 0.01, // ~1km
-        longitudeDelta: 0.01,
-      };
-      
-      setRegion(initialRegion);
-      
-      if (Platform.OS !== 'web' && mapRef.current?.animateToRegion) {
-        mapRef.current.animateToRegion(initialRegion, 1000);
-      }
+      });
     }
   }, [location, region]);
 
   const initializeLocation = async () => {
     try {
       const isEnabled = await locationService.checkLocationEnabled();
-      
+
       if (!isEnabled) {
         Alert.alert(
           'Location Required',
@@ -102,188 +195,175 @@ export const MapScreen: React.FC<MapScreenProps> = ({ onNotePress, onMapPress })
   };
 
   const handleMapReady = () => {
-    console.log('Map is ready');
     setMapReady(true);
   };
 
-  const handleMapPress = (event: any) => {
-    if (onMapPress) {
-      let coordinate;
-      
-      if (Platform.OS === 'web') {
-        // Leaflet event structure
-        coordinate = {
-          latitude: event.latlng?.lat || event.latitude,
-          longitude: event.latlng?.lng || event.longitude,
-        };
-      } else {
-        // React Native Maps event structure
-        coordinate = event.nativeEvent?.coordinate || event;
-      }
-      
-      onMapPress(coordinate);
-    }
-  };
+  const handleMapPress = useCallback(
+    (event: any) => {
+      if (onMapPress) {
+        let coordinate;
 
-  const handleMarkerPress = (note: Note) => {
-    setSelectedNote(note.id);
-    if (onNotePress) {
-      onNotePress(note);
-    }
-  };
+        if (Platform.OS === 'web') {
+          const lat = event.latlng?.lat ?? event.latitude;
+          const lng = event.latlng?.lng ?? event.longitude;
+          if (lat === undefined || lng === undefined) return;
+          coordinate = { latitude: lat, longitude: lng };
+        } else {
+          const coords = event.geometry?.coordinates;
+          if (coords) {
+            coordinate = { latitude: coords[1], longitude: coords[0] };
+          } else {
+            coordinate = event.nativeEvent?.coordinate || event;
+          }
+          if (!coordinate?.latitude || !coordinate?.longitude) return;
+        }
+
+        onMapPress(coordinate);
+      }
+    },
+    [onMapPress]
+  );
+
+  const handleMarkerPress = useCallback(
+    (note: Note) => {
+      if (onNotePress) {
+        onNotePress(note);
+      }
+    },
+    [onNotePress]
+  );
+
+  const clusters = useMemo(() => clusterNotes(allNotes), [allNotes]);
+
+  const notesGeoJSON = useMemo(() => notesToGeoJSON(clusters), [clusters]);
+
+  const clusterFeatures = useMemo(
+    () =>
+      clusters
+        .filter((c) => c.notes.length > 1)
+        .map(
+          (c): GeoJSON.Feature => ({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [c.longitude, c.latitude] },
+            properties: {
+              id: `cluster-${c.latitude.toFixed(4)}-${c.longitude.toFixed(4)}`,
+              count: c.notes.length,
+              title: `${c.notes.length} notes`,
+            },
+          })
+        ),
+    [clusters]
+  );
+
+  const clusterGeoJSON: GeoJSON.FeatureCollection = useMemo(
+    () => ({ type: 'FeatureCollection', features: clusterFeatures }),
+    [clusterFeatures]
+  );
 
   const renderNativeMap = () => {
-    if (!MapView) return null;
-
-    const renderNoteMarkers = () => {
-      return allNotes.map((note) => (
-        <Marker
-          key={note.id}
-          coordinate={{
-            latitude: note.location.latitude,
-            longitude: note.location.longitude,
-          }}
-          title={note.username}
-          description={note.content.substring(0, 50) + (note.content.length > 50 ? '...' : '')}
-          onPress={() => handleMarkerPress(note)}
-          pinColor={note.hasUserVoted === 'up' ? '#4CAF50' : 
-                   note.hasUserVoted === 'down' ? '#f44336' : '#2196F3'}
-        />
-      ));
-    };
-
-    const renderUserLocationMarker = () => {
-      if (!location.latitude || !location.longitude) return null;
-
-      return (
-        <Marker
-          coordinate={{
-            latitude: location.latitude,
-            longitude: location.longitude,
-          }}
-          title="Your Location"
-          pinColor="#FF5722"
-          anchor={{ x: 0.5, y: 0.5 }}
-        />
-      );
-    };
+    if (!MapLibreGL) return null;
 
     return (
-      <MapView
-        ref={mapRef}
+      <MapLibreGL.MapView
         style={styles.map}
-        initialRegion={region}
-        showsUserLocation={true}
-        showsMyLocationButton={true}
-        showsCompass={true}
-        showsScale={true}
-        onMapReady={handleMapReady}
+        styleJSON={getMapStyle()}
+        logoEnabled={false}
+        attributionEnabled={false}
         onPress={handleMapPress}
-        onRegionChangeComplete={setRegion}
-        loadingEnabled={true}
-        loadingIndicatorColor="#2196F3"
-        moveOnMarkerPress={false}
-        mapType="none" // Disable default tiles to use custom OpenStreetMap tiles
+        onDidFinishLoadingMap={handleMapReady}
       >
-        {/* OpenStreetMap tiles - Multiple options available */}
-        <UrlTile
-          urlTemplate="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
-          maximumZ={19}
-          flipY={false}
-          // Attribution: © OpenStreetMap contributors
+        <MapLibreGL.Camera
+          followUserLocation={!region}
+          followZoomLevel={14}
+          centerCoordinate={
+            region ? [region.longitude, region.latitude] : undefined
+          }
+          zoomLevel={region ? 14 : undefined}
         />
-        {/* Alternative tile servers you can use:
-          
-          // Carto Light (clean, minimal):
-          // urlTemplate="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
-          
-          // Carto Dark (for dark theme):
-          // urlTemplate="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-          
-          // OpenTopoMap (topographic):
-          // urlTemplate="https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png"
-          
-        */}
-        {renderUserLocationMarker()}
-        {renderNoteMarkers()}
-      </MapView>
-    );
-  };
 
-  const renderWebMap = () => {
-    if (!MapContainer || !region) return null;
+        <MapLibreGL.UserLocation visible={true} />
 
-    const center: [number, number] = [region.latitude, region.longitude];
+        <MapLibreGL.ShapeSource
+          id="notes"
+          shape={notesGeoJSON}
+          onPress={(e: any) => {
+            const feature = e.features?.[0];
+            if (!feature) return;
+            const noteId = feature.properties?.noteId;
+            if (noteId) {
+              const note = allNotes.find((n) => n.id === noteId);
+              if (note) handleMarkerPress(note);
+            }
+          }}
+          cluster={true}
+          clusterRadius={50}
+          clusterMaxZoom={14}
+        >
+          <MapLibreGL.SymbolLayer id="note-markers" style={markerStyle} filter={['!', ['has', 'point_count']]} />
+          <MapLibreGL.CircleLayer id="cluster-circles" style={clusterStyle} filter={['has', 'point_count']} />
+          <MapLibreGL.SymbolLayer id="cluster-counts" style={{
+            textField: ['get', 'point_count'],
+            textSize: 14,
+            textColor: '#ffffff',
+            textAnchor: 'center',
+          }} filter={['has', 'point_count']} />
+        </MapLibreGL.ShapeSource>
 
-    return (
-      <MapContainer
-        center={center}
-        zoom={15}
-        style={styles.map}
-        whenCreated={(map: any) => {
-          mapRef.current = map;
-          handleMapReady();
-        }}
-        onClick={handleMapPress}
-      >
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
-        
-        {/* User location marker */}
-        {location.latitude && location.longitude && (
-          <LeafletMarker 
-            position={[location.latitude, location.longitude]}
-          >
-            <Popup>Your Location</Popup>
-          </LeafletMarker>
+        {routeGeometry && (
+          <MapLibreGL.ShapeSource id="route" shape={routeGeometry}>
+            <MapLibreGL.LineLayer id="route-line" style={routeStyle} />
+          </MapLibreGL.ShapeSource>
         )}
-        
-        {/* Note markers */}
-        {allNotes.map((note) => (
-          <LeafletMarker
-            key={note.id}
-            position={[note.location.latitude, note.location.longitude]}
-            eventHandlers={{
-              click: () => handleMarkerPress(note),
-            }}
-          >
-            <Popup>
-              <div>
-                <strong>{note.username}</strong>
-                <br />
-                {note.content.substring(0, 50) + (note.content.length > 50 ? '...' : '')}
-              </div>
-            </Popup>
-          </LeafletMarker>
-        ))}
-      </MapContainer>
+      </MapLibreGL.MapView>
     );
   };
 
-  if (!region || !componentsInitialized) {
+  const styles = createStyles(colors);
+
+  if (!componentsInitialized) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#2196F3" />
+        <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
+
+  if (!region) {
+    return (
+      <View style={styles.loadingContainer}>
+        <Ionicons name="location-outline" size={48} color={colors.textSecondary} />
+        <Text style={[styles.unavailableText, { color: colors.textSecondary }]}>
+          Location unavailable
+        </Text>
+        <Text style={[styles.unavailableSubtext, { color: colors.textTertiary }]}>
+          Enable location services to see the map
+        </Text>
+        <TouchableOpacity
+          style={[styles.retryButton, { backgroundColor: colors.primary }]}
+          onPress={initializeLocation}
+          accessibilityLabel="Retry location"
+          accessibilityRole="button"
+        >
+          <Text style={[styles.retryButtonText, { color: colors.surface }]}>Retry</Text>
+        </TouchableOpacity>
       </View>
     );
   }
 
   return (
     <View style={styles.container}>
-      {Platform.OS === 'web' ? renderWebMap() : renderNativeMap()}
-      
+      {renderNativeMap()}
+
       {isLoading && (
         <View style={styles.loadingOverlay}>
-          <ActivityIndicator size="small" color="#2196F3" />
+          <ActivityIndicator size="small" color={colors.primary} />
         </View>
       )}
     </View>
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors) => StyleSheet.create({
   container: {
     flex: 1,
   },
@@ -294,20 +374,38 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f5f5f5',
+    backgroundColor: colors.background,
+    gap: 12,
+  },
+  unavailableText: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginTop: 12,
+  },
+  unavailableSubtext: {
+    fontSize: 14,
+    textAlign: 'center',
+    paddingHorizontal: 40,
+  },
+  retryButton: {
+    marginTop: 16,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
   },
   loadingOverlay: {
     position: 'absolute',
     top: 50,
     right: 20,
-    backgroundColor: 'white',
+    backgroundColor: colors.surface,
     borderRadius: 20,
     padding: 10,
-    shadowColor: '#000',
-    shadowOffset: {
-      width: 0,
-      height: 2,
-    },
+    shadowColor: colors.shadow,
+    shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.25,
     shadowRadius: 3.84,
     elevation: 5,

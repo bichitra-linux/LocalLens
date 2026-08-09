@@ -21,7 +21,7 @@ export interface FirebaseNoteDoc {
   username: string; // denormalized for performance
   userAvatar?: string; // denormalized for performance
   content: string;
-  imageUrl?: string;
+  category?: string; // note category
   
   // Geospatial data - key for efficient querying
   latitude: number;
@@ -35,11 +35,14 @@ export interface FirebaseNoteDoc {
   downvotes: number;
   commentsCount: number;
   isActive: boolean;
+  reactionCounts?: Record<string, number>;
   
   // Composite indexes needed:
   // - geohash, isActive, createdAt (desc)
   // - userId, createdAt (desc)
   // - expiresAt (for cleanup job)
+  // - isActive, expiresAt, category, createdAt
+  // - isActive, expiresAt, upvotes (desc)
 }
 
 export interface FirebaseVoteDoc {
@@ -73,11 +76,27 @@ export interface FirebaseCommentDoc {
 export const GEOHASH_PRECISION = 7; // ~150m accuracy
 export const SEARCH_RADIUS_KM = 5; // Default search radius
 
+export interface FirebaseReactionDoc {
+  id: string;
+  noteId: string;
+  userId: string;
+  emoji: string;
+  createdAt: Timestamp;
+}
+
+export interface FirebaseAchievementDoc {
+  achievementId: string;
+  progress: number;
+  unlocked: boolean;
+  unlockedAt?: Timestamp;
+}
+
 // Collection names
 export const Collections = {
   USERS: 'users',
   NOTES: 'notes',
   VOTES: 'votes',
   COMMENTS: 'comments',
-  REPORTS: 'reports', // for moderation
+  REACTIONS: 'reactions',
+
 } as const;

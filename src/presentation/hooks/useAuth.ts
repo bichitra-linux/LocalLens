@@ -10,6 +10,7 @@ const authUseCase = new AuthUseCase(userRepository);
 
 // Query keys
 export const authKeys = {
+  all: ['auth'] as const,
   currentUser: ['auth', 'currentUser'] as const,
   user: (id: string) => ['auth', 'user', id] as const,
 };
@@ -19,7 +20,7 @@ export const useCurrentUser = () => {
   return useQuery({
     queryKey: authKeys.currentUser,
     queryFn: () => authUseCase.getCurrentUser(),
-    staleTime: Infinity,
+    staleTime: 0,
   });
 };
 
@@ -81,7 +82,7 @@ export const useSignOut = () => {
   return useMutation({
     mutationFn: () => authUseCase.signOut(),
     onSuccess: () => {
-      queryClient.clear();
+      queryClient.removeQueries({ queryKey: authKeys.all });
       queryClient.setQueryData(authKeys.currentUser, null);
     },
   });
@@ -103,6 +104,19 @@ export const useUpdateProfile = () => {
       queryClient.setQueryData(authKeys.user(userId), (old: User | null) => 
         old ? { ...old, ...updates } : old
       );
+    },
+  });
+};
+
+export const useDeleteAccount = () => {
+  const queryClient = useQueryClient();
+  
+  return useMutation({
+    mutationFn: ({ userId, email, password }: { userId: string; email: string; password: string }) =>
+      authUseCase.deleteUser(userId, email, password),
+    onSuccess: () => {
+      // Clear all queries from cache
+      queryClient.clear();
     },
   });
 };

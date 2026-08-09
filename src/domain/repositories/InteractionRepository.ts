@@ -5,6 +5,7 @@ export interface InteractionRepository {
   voteOnNote(request: CreateVoteRequest): Promise<void>;
   removeVote(noteId: string): Promise<void>;
   getUserVote(noteId: string): Promise<Vote | null>;
+  getUserVotes(noteIds: string[]): Promise<Map<string, 'up' | 'down'>>;
   getComments(noteId: string, lastDoc?: any): Promise<PaginatedResponse<Comment>>;
   createComment(request: CreateCommentRequest): Promise<Comment>;
   deleteComment(id: string): Promise<void>;

@@ -23,16 +23,13 @@ export class NoteUseCase {
 
     const result = await this.noteRepository.getNotesByLocation(query, lastDoc);
     
-    // Enrich notes with user vote status
-    const enrichedNotes = await Promise.all(
-      result.data.map(async (note) => {
-        const userVote = await this.interactionRepository.getUserVote(note.id);
-        return {
-          ...note,
-          hasUserVoted: userVote?.type || null,
-        };
-      })
-    );
+    // Enrich notes with user vote status via batched query
+    const noteIds = result.data.map(n => n.id);
+    const voteMap = noteIds.length > 0 ? await this.interactionRepository.getUserVotes(noteIds) : new Map();
+    const enrichedNotes = result.data.map(note => ({
+      ...note,
+      hasUserVoted: voteMap.get(note.id) || null,
+    }));
 
     return {
       ...result,
@@ -71,7 +68,7 @@ export class NoteUseCase {
     }
 
     // Validate expiration
-    const expiresInDays = request.expiresInDays || 7;
+    const expiresInDays = request.expiresInDays ?? 7;
     if (expiresInDays < 1 || expiresInDays > 30) {
       throw new Error('Notes can expire between 1 and 30 days');
     }

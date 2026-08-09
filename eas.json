@@ -35,7 +35,7 @@
         "buildConfiguration": "Release"
       },
       "android": {
-        "buildType": "aab"
+        "buildType": "app-bundle"
       },
       "channel": "production",
       "env": {

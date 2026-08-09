@@ -11,6 +11,7 @@ import {
   startAfter,
   getDocs,
   writeBatch,
+  runTransaction,
   increment,
   Timestamp,
   QueryDocumentSnapshot,
@@ -28,42 +29,55 @@ export class FirebaseInteractionRepository implements InteractionRepository {
         throw new Error('User must be authenticated to vote');
       }
 
-      const batch = writeBatch(firestore);
-      
-      // Check if user already voted
-      const existingVote = await this.getUserVote(request.noteId);
-      
-      if (existingVote) {
-        // Remove existing vote first
-        await this.removeVote(request.noteId);
-        
-        // Don't create new vote if it's the same type
-        if (existingVote.type === request.type) {
-          return;
+      await runTransaction(firestore, async (transaction) => {
+        const votesCollection = collection(firestore, Collections.VOTES);
+        const existingQuery = query(
+          votesCollection,
+          where('userId', '==', auth.currentUser!.uid),
+          where('noteId', '==', request.noteId),
+          limit(1)
+        );
+
+        const existingSnap = await getDocs(existingQuery);
+        let existingVote: Vote | null = null;
+        if (!existingSnap.empty) {
+          existingVote = this.mapFirebaseVoteToVote(existingSnap.docs[0].data() as FirebaseVoteDoc);
+
+          if (existingVote.type === request.type) {
+            transaction.delete(existingSnap.docs[0].ref);
+            const noteRef = doc(firestore, Collections.NOTES, request.noteId);
+            const decrement = request.type === 'up' ? { upvotes: increment(-1) } : { downvotes: increment(-1) };
+            transaction.update(noteRef, decrement);
+            const userRef = doc(firestore, Collections.USERS, auth.currentUser!.uid);
+            transaction.update(userRef, { votesCount: increment(-1) });
+            return;
+          }
+
+          transaction.delete(existingSnap.docs[0].ref);
+          const noteRef = doc(firestore, Collections.NOTES, request.noteId);
+          const reverseDecrement = existingVote.type === 'up' ? { upvotes: increment(-1) } : { downvotes: increment(-1) };
+          transaction.update(noteRef, reverseDecrement);
         }
-      }
 
-      // Create new vote
-      const voteData: Omit<FirebaseVoteDoc, 'id'> = {
-        userId: auth.currentUser.uid,
-        noteId: request.noteId,
-        type: request.type,
-        createdAt: Timestamp.now(),
-      };
+        const voteData: Omit<FirebaseVoteDoc, 'id'> = {
+          userId: auth.currentUser!.uid,
+          noteId: request.noteId,
+          type: request.type,
+          createdAt: Timestamp.now(),
+        };
 
-      const voteRef = doc(collection(firestore, Collections.VOTES));
-      batch.set(voteRef, { ...voteData, id: voteRef.id });
+        const voteRef = doc(collection(firestore, Collections.VOTES));
+        transaction.set(voteRef, { ...voteData, id: voteRef.id });
 
-      // Update note vote counts
-      const noteRef = doc(firestore, Collections.NOTES, request.noteId);
-      const voteIncrement = request.type === 'up' ? { upvotes: increment(1) } : { downvotes: increment(1) };
-      batch.update(noteRef, voteIncrement);
+        const noteRef = doc(firestore, Collections.NOTES, request.noteId);
+        const voteIncrement = request.type === 'up' ? { upvotes: increment(1) } : { downvotes: increment(1) };
+        transaction.update(noteRef, voteIncrement);
 
-      // Update user vote count
-      const userRef = doc(firestore, Collections.USERS, auth.currentUser.uid);
-      batch.update(userRef, { votesCount: increment(1) });
-
-      await batch.commit();
+        if (!existingVote) {
+          const userRef = doc(firestore, Collections.USERS, auth.currentUser!.uid);
+          transaction.update(userRef, { votesCount: increment(1) });
+        }
+      });
     } catch (error) {
       console.error('Error voting on note:', error);
       throw error;
@@ -202,6 +216,29 @@ export class FirebaseInteractionRepository implements InteractionRepository {
       console.error('Error creating comment:', error);
       throw error;
     }
+  }
+
+  async getUserVotes(noteIds: string[]): Promise<Map<string, 'up' | 'down'>> {
+    if (!auth.currentUser || noteIds.length === 0) return new Map();
+    const votesCollection = collection(firestore, Collections.VOTES);
+    const chunks: string[][] = [];
+    for (let i = 0; i < noteIds.length; i += 30) {
+      chunks.push(noteIds.slice(i, i + 30));
+    }
+    const result = new Map<string, 'up' | 'down'>();
+    for (const chunk of chunks) {
+      const q = query(
+        votesCollection,
+        where('userId', '==', auth.currentUser.uid),
+        where('noteId', 'in', chunk)
+      );
+      const snapshot = await getDocs(q);
+      snapshot.docs.forEach(doc => {
+        const data = doc.data() as FirebaseVoteDoc;
+        result.set(data.noteId, data.type);
+      });
+    }
+    return result;
   }
 
   async deleteComment(id: string): Promise<void> {

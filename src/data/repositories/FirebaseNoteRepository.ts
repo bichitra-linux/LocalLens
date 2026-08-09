@@ -14,38 +14,42 @@ import {
   onSnapshot,
   Timestamp,
   QueryDocumentSnapshot,
+  Unsubscribe,
 } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { firestore, storage, auth } from '../../core/firebase';
+import { firestore, auth } from '../../core/firebase';
 import { NoteRepository } from '../../domain/repositories/NoteRepository';
 import { Note, CreateNoteRequest, UpdateNoteRequest, Location } from '../../domain/entities/Note';
 import { GeospatialQuery, PaginatedResponse } from '../../domain/entities/Common';
 import { FirebaseNoteDoc, Collections, GEOHASH_PRECISION } from '../models/FirebaseModels';
-import { 
-  generateGeohash, 
-  generateGeohashPrefixes, 
+import {
+  generateGeohash,
+  generateGeohashPrefixes,
   getNeighboringGeohashes,
-  calculateDistance 
+  calculateDistance
 } from '../../utils/geospatial';
 
 export class FirebaseNoteRepository implements NoteRepository {
   async getNotesByLocation(
-    geoQuery: GeospatialQuery, 
+    geoQuery: GeospatialQuery,
     lastDoc?: QueryDocumentSnapshot
   ): Promise<PaginatedResponse<Note>> {
     try {
       const { latitude, longitude, radiusInKm } = geoQuery;
-      const centerGeohash = generateGeohash(latitude, longitude);
-      
-      // Get neighboring geohashes for comprehensive coverage
       const geohashesToQuery = getNeighboringGeohashes(latitude, longitude);
-      
+
       const notesCollection = collection(firestore, Collections.NOTES);
+
+      // Single bounding-box query using the min/max geohash across neighbors
+      const minHash = geohashesToQuery.reduce((min, g) => g < min ? g : min, geohashesToQuery[0]);
+      const maxHash = geohashesToQuery.reduce((max, g) => g > max ? g : max, geohashesToQuery[0]);
+
       let q = query(
         notesCollection,
         where('isActive', '==', true),
         where('expiresAt', '>', Timestamp.now()),
-        orderBy('expiresAt'),
+        where('geohash', '>=', minHash),
+        where('geohash', '<=', maxHash + '~'),
+        orderBy('geohash'),
         orderBy('createdAt', 'desc'),
         limit(20)
       );
@@ -55,22 +59,17 @@ export class FirebaseNoteRepository implements NoteRepository {
       }
 
       const snapshot = await getDocs(q);
-      const notes: Note[] = [];
 
-      snapshot.docs.forEach(doc => {
-        const data = doc.data() as FirebaseNoteDoc;
-        const distance = calculateDistance(
-          latitude, 
-          longitude, 
-          data.latitude, 
-          data.longitude
-        );
-
-        // Filter by actual distance
-        if (distance <= radiusInKm) {
-          notes.push(this.mapFirebaseNoteToNote(data));
-        }
-      });
+      const notes = snapshot.docs
+        .map(doc => {
+          const data = doc.data() as FirebaseNoteDoc;
+          return { data, doc };
+        })
+        .filter(({ data }) => {
+          const distance = calculateDistance(latitude, longitude, data.latitude, data.longitude);
+          return distance <= radiusInKm;
+        })
+        .map(({ data }) => this.mapFirebaseNoteToNote(data));
 
       return {
         data: notes,
@@ -87,7 +86,7 @@ export class FirebaseNoteRepository implements NoteRepository {
     try {
       const docRef = doc(firestore, Collections.NOTES, id);
       const docSnap = await getDoc(docRef);
-      
+
       if (!docSnap.exists()) {
         return null;
       }
@@ -115,7 +114,7 @@ export class FirebaseNoteRepository implements NoteRepository {
       }
 
       const snapshot = await getDocs(q);
-      const notes = snapshot.docs.map(doc => 
+      const notes = snapshot.docs.map(doc =>
         this.mapFirebaseNoteToNote(doc.data() as FirebaseNoteDoc)
       );
 
@@ -138,23 +137,16 @@ export class FirebaseNoteRepository implements NoteRepository {
 
       const geohash = generateGeohash(request.location.latitude, request.location.longitude);
       const geohashPrefixes = generateGeohashPrefixes(geohash);
-      
-      // Calculate expiration date
+
       const expiresInDays = request.expiresInDays || 7;
       const expiresAt = new Date();
       expiresAt.setDate(expiresAt.getDate() + expiresInDays);
 
-      let imageUrl: string | undefined;
-      if (request.imageUri) {
-        imageUrl = await this.uploadImage(request.imageUri);
-      }
-
       const noteData: Omit<FirebaseNoteDoc, 'id'> = {
         userId: auth.currentUser.uid,
         username: auth.currentUser.displayName || 'Anonymous',
-        userAvatar: auth.currentUser.photoURL || undefined,
+        userAvatar: auth.currentUser.photoURL ?? null,
         content: request.content,
-        imageUrl,
         latitude: request.location.latitude,
         longitude: request.location.longitude,
         geohash,
@@ -165,10 +157,11 @@ export class FirebaseNoteRepository implements NoteRepository {
         downvotes: 0,
         commentsCount: 0,
         isActive: true,
+        reactionCounts: {},
       };
 
       const docRef = await addDoc(collection(firestore, Collections.NOTES), noteData);
-      
+
       return this.mapFirebaseNoteToNote({
         ...noteData,
         id: docRef.id,
@@ -188,10 +181,6 @@ export class FirebaseNoteRepository implements NoteRepository {
         updateData.content = request.content;
       }
 
-      if (request.imageUri) {
-        updateData.imageUrl = await this.uploadImage(request.imageUri);
-      }
-
       await updateDoc(docRef, updateData);
     } catch (error) {
       console.error('Error updating note:', error);
@@ -209,28 +198,12 @@ export class FirebaseNoteRepository implements NoteRepository {
     }
   }
 
-  async uploadImage(uri: string): Promise<string> {
-    try {
-      const response = await fetch(uri);
-      const blob = await response.blob();
-      
-      const filename = `notes/${Date.now()}_${Math.random().toString(36).substring(7)}`;
-      const storageRef = ref(storage, filename);
-      
-      const snapshot = await uploadBytes(storageRef, blob);
-      return await getDownloadURL(snapshot.ref);
-    } catch (error) {
-      console.error('Error uploading image:', error);
-      throw error;
-    }
-  }
-
   listenToNotesInArea(
-    geoQuery: GeospatialQuery, 
+    geoQuery: GeospatialQuery,
     callback: (notes: Note[]) => void
-  ): () => void {
+  ): Unsubscribe {
     const { latitude, longitude, radiusInKm } = geoQuery;
-    
+
     const notesCollection = collection(firestore, Collections.NOTES);
     const q = query(
       notesCollection,
@@ -243,13 +216,13 @@ export class FirebaseNoteRepository implements NoteRepository {
 
     return onSnapshot(q, (snapshot) => {
       const notes: Note[] = [];
-      
+
       snapshot.docs.forEach(doc => {
         const data = doc.data() as FirebaseNoteDoc;
         const distance = calculateDistance(
-          latitude, 
-          longitude, 
-          data.latitude, 
+          latitude,
+          longitude,
+          data.latitude,
           data.longitude
         );
 
@@ -269,7 +242,6 @@ export class FirebaseNoteRepository implements NoteRepository {
       username: firebaseNote.username,
       userAvatar: firebaseNote.userAvatar,
       content: firebaseNote.content,
-      imageUrl: firebaseNote.imageUrl,
       location: {
         latitude: firebaseNote.latitude,
         longitude: firebaseNote.longitude,
@@ -281,6 +253,7 @@ export class FirebaseNoteRepository implements NoteRepository {
       downvotes: firebaseNote.downvotes,
       commentsCount: firebaseNote.commentsCount,
       isActive: firebaseNote.isActive,
+      reactionCounts: firebaseNote.reactionCounts,
     };
   }
 }

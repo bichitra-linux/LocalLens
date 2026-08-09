@@ -18,9 +18,9 @@ interface AppState {
   // Location state
   location: LocationState;
   isLocationEnabled: boolean;
+  locationSource: 'gps' | 'network' | null;
   
   // UI state
-  selectedNoteId: string | null;
   isMapReady: boolean;
   searchRadius: number;
   
@@ -29,9 +29,10 @@ interface AppState {
   setAuthenticating: (isAuthenticating: boolean) => void;
   setLocation: (location: LocationState) => void;
   setLocationEnabled: (enabled: boolean) => void;
-  setSelectedNote: (noteId: string | null) => void;
+  setLocationSource: (source: 'gps' | 'network' | null) => void;
   setMapReady: (ready: boolean) => void;
   setSearchRadius: (radius: number) => void;
+  clearUser: () => void;
   reset: () => void;
 }
 
@@ -45,7 +46,7 @@ const initialState = {
     timestamp: null,
   },
   isLocationEnabled: false,
-  selectedNoteId: null,
+  locationSource: null,
   isMapReady: false,
   searchRadius: 5, // 5km default
 };
@@ -68,14 +69,17 @@ export const useAppStore = create<AppState>()(
         setLocationEnabled: (isLocationEnabled) => 
           set({ isLocationEnabled }, false, 'setLocationEnabled'),
         
-        setSelectedNote: (selectedNoteId) => 
-          set({ selectedNoteId }, false, 'setSelectedNote'),
+        setLocationSource: (locationSource) => 
+          set({ locationSource }, false, 'setLocationSource'),
         
         setMapReady: (isMapReady) => 
           set({ isMapReady }, false, 'setMapReady'),
         
         setSearchRadius: (searchRadius) => 
           set({ searchRadius }, false, 'setSearchRadius'),
+        
+        clearUser: () => 
+          set({ user: null }, false, 'clearUser'),
         
         reset: () => 
           set(initialState, false, 'reset'),
@@ -86,7 +90,6 @@ export const useAppStore = create<AppState>()(
         partialize: (state) => ({
           user: state.user,
           searchRadius: state.searchRadius,
-          isLocationEnabled: state.isLocationEnabled,
         }),
         skipHydration: false, // Enable hydration
       }

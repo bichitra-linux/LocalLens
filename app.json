@@ -2,10 +2,10 @@
   "expo": {
     "name": "LocalLens",
     "slug": "locallens-app",
-    "version": "1.0.0",
+    "version": "1.0.4",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "splash": {
       "image": "./assets/splash-icon.png",
@@ -17,12 +17,10 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.yourname.locallens",
+      "bundleIdentifier": "np.com.bichitra.locallens",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "LocalLens needs location access to show nearby notes and create location-based content.",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "LocalLens needs location access to provide location-based features and notifications about nearby notes.",
-        "NSCameraUsageDescription": "LocalLens needs camera access to take photos for your notes.",
-        "NSPhotoLibraryUsageDescription": "LocalLens needs photo library access to add images to your notes."
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "LocalLens needs location access to provide location-based features and notifications about nearby notes."
       }
     },
     "android": {
@@ -31,36 +29,35 @@
         "backgroundColor": "#2196F3"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false,
-      "package": "com.yourname.locallens",
+      "predictiveBackGestureEnabled": true,
+      "package": "np.com.bichitra.locallens",
       "permissions": [
-        "ACCESS_FINE_LOCATION",
-        "ACCESS_COARSE_LOCATION",
-        "ACCESS_BACKGROUND_LOCATION",
-        "CAMERA",
-        "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE"
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_BACKGROUND_LOCATION"
       ]
     },
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "plugins": [
-      "expo-location",
-      "expo-image-picker",
-      [
-        "expo-build-properties",
-        {
-          "ios": {
-            "useFrameworks": "static"
-          }
+  "plugins": [
+    "expo-location",
+    "@maplibre/maplibre-react-native",
+    [
+      "expo-build-properties",
+      {
+        "ios": {
+          "useFrameworks": "static"
         }
-      ]
+      }
     ],
+    "react-native-google-mobile-ads"
+  ],
     "extra": {
       "eas": {
-        "projectId": "your-eas-project-id"
+        "projectId": "9d01c23d-3b84-4802-8d8f-27a708860e62"
       }
-    }
+    },
+    "owner": "bichitra"
   }
 }

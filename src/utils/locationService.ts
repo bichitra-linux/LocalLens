@@ -1,4 +1,7 @@
 import * as Location from 'expo-location';
+// Note: This utility imports from the presentation layer (Zustand store) for state updates.
+// This is an intentional deviation from clean architecture for simplicity.
+// In a production app, consider using an event emitter or callback pattern.
 import { useAppStore } from '../presentation/store/appStore';
 
 export interface LocationCoordinates {
@@ -24,16 +27,16 @@ export class LocationService {
       const { status: foregroundStatus } = await Location.requestForegroundPermissionsAsync();
       
       if (foregroundStatus !== 'granted') {
-        console.log('Foreground location permission not granted');
+        if (__DEV__) console.log('Foreground location permission not granted');
         return false;
       }
 
       // Request background permissions for better experience (optional)
       try {
         const { status: backgroundStatus } = await Location.requestBackgroundPermissionsAsync();
-        console.log('Background location permission:', backgroundStatus);
+        if (__DEV__) console.log('Background location permission:', backgroundStatus);
       } catch (error) {
-        console.log('Background permission not available:', error);
+        if (__DEV__) console.log('Background permission not available:', error);
       }
 
       return true;
@@ -63,11 +66,53 @@ export class LocationService {
 
       // Update store
       useAppStore.getState().setLocation(coordinates);
+      useAppStore.getState().setLocationSource(
+        (location.coords.accuracy ?? 99) < 20 ? 'gps' : 'network'
+      );
       
       return coordinates;
     } catch (error) {
       console.error('Error getting current location:', error);
       return null;
+    }
+  }
+
+  async getCurrentLocationGpsOnly(): Promise<LocationCoordinates | null> {
+    try {
+      const hasPermission = await this.requestPermissions();
+      if (!hasPermission) return null;
+
+      const location = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Highest, // GPS only, no network
+      });
+
+      const coordinates: LocationCoordinates = {
+        latitude: location.coords.latitude,
+        longitude: location.coords.longitude,
+        accuracy: location.coords.accuracy,
+        timestamp: location.timestamp,
+      };
+
+      useAppStore.getState().setLocation(coordinates);
+      useAppStore.getState().setLocationSource(
+        (location.coords.accuracy ?? 99) < 20 ? 'gps' : 'network'
+      );
+
+      return coordinates;
+    } catch (error) {
+      console.error('Error getting GPS location:', error);
+      return null;
+    }
+  }
+
+  async warmUpGps(): Promise<void> {
+    try {
+      // Quick low-accuracy fix to start GPS hardware
+      await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Low,
+      });
+    } catch {
+      // Ignore errors during warm-up
     }
   }
 
@@ -97,6 +142,9 @@ export class LocationService {
           };
 
           useAppStore.getState().setLocation(coordinates);
+          useAppStore.getState().setLocationSource(
+            (location.coords.accuracy ?? 99) < 20 ? 'gps' : 'network'
+          );
         }
       );
 
@@ -125,28 +173,6 @@ export class LocationService {
     }
   }
 
-  calculateDistance(
-    lat1: number,
-    lon1: number,
-    lat2: number,
-    lon2: number
-  ): number {
-    const R = 6371; // Earth's radius in km
-    const dLat = this.toRadians(lat2 - lat1);
-    const dLon = this.toRadians(lon2 - lon1);
-    
-    const a = 
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(this.toRadians(lat1)) * Math.cos(this.toRadians(lat2)) *
-      Math.sin(dLon / 2) * Math.sin(dLon / 2);
-    
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
-  }
-
-  private toRadians(degrees: number): number {
-    return degrees * (Math.PI / 180);
-  }
 }
 
 export const locationService = LocationService.getInstance();

@@ -8,6 +8,5 @@ export interface NoteRepository {
   createNote(request: CreateNoteRequest): Promise<Note>;
   updateNote(request: UpdateNoteRequest): Promise<void>;
   deleteNote(id: string): Promise<void>;
-  uploadImage(uri: string): Promise<string>;
   listenToNotesInArea(query: GeospatialQuery, callback: (notes: Note[]) => void): () => void;
 }

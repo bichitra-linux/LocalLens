@@ -57,6 +57,14 @@ export class AuthUseCase {
     await this.userRepository.updateUser(userId, updates);
   }
 
+  async deleteUser(userId: string, email: string, password: string): Promise<void> {
+    if (!email || !password) {
+      throw new Error('Email and password are required to delete account');
+    }
+
+    await this.userRepository.deleteUser(userId, email, password);
+  }
+
   private isValidEmail(email: string): boolean {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return emailRegex.test(email);

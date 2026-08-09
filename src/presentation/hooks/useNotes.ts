@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
 import { NoteUseCase } from '../../domain/usecases/NoteUseCase';
 import { InteractionUseCase } from '../../domain/usecases/InteractionUseCase';
@@ -28,12 +29,12 @@ export const useNearbyNotes = () => {
   
   return useInfiniteQuery({
     queryKey: noteKeys.nearby(
-      location.latitude || 0, 
-      location.longitude || 0, 
+      location.latitude ?? 0, 
+      location.longitude ?? 0, 
       searchRadius
     ),
     queryFn: ({ pageParam }) => {
-      if (!location.latitude || !location.longitude) {
+      if (location.latitude === null || location.longitude === null) {
         throw new Error('Location is required');
       }
       
@@ -44,7 +45,7 @@ export const useNearbyNotes = () => {
         pageParam
       );
     },
-    enabled: !!(location.latitude && location.longitude),
+    enabled: location.latitude !== null && location.longitude !== null,
     initialPageParam: undefined,
     getNextPageParam: (lastPage) => 
       lastPage.hasMore ? lastPage.lastDoc : undefined,
@@ -75,40 +76,55 @@ export const useUserNotes = (userId: string) => {
 export const useNearbyNotesListener = () => {
   const { location, searchRadius } = useAppStore();
   const queryClient = useQueryClient();
-  
-  return useQuery({
-    queryKey: ['notes', 'listener', location.latitude, location.longitude, searchRadius],
-    queryFn: () => {
-      if (!location.latitude || !location.longitude) {
-        return Promise.resolve([]);
-      }
+  const unsubscribeRef = useRef<(() => void) | null>(null);
 
-      return new Promise<Note[]>((resolve) => {
-        const unsubscribe = noteUseCase.listenToNearbyNotes(
-          location.latitude!,
-          location.longitude!,
-          searchRadius,
-          (notes) => {
-            // Update the nearby notes cache
-            queryClient.setQueryData(
-              noteKeys.nearby(location.latitude!, location.longitude!, searchRadius),
-              (old: any) => ({
-                pages: [{ data: notes, hasMore: false }],
-                pageParams: [undefined],
-              })
-            );
-            resolve(notes);
+  useEffect(() => {
+    if (!location.latitude || !location.longitude) return;
+
+    // Clean up previous listener
+    if (unsubscribeRef.current) {
+      unsubscribeRef.current();
+    }
+
+    const unsubscribe = noteUseCase.listenToNearbyNotes(
+      location.latitude,
+      location.longitude,
+      searchRadius,
+      (notes) => {
+        const queryKey = noteKeys.nearby(location.latitude!, location.longitude!, searchRadius);
+        queryClient.setQueryData(queryKey, (old: any) => {
+          if (!old?.pages?.[0]) {
+            return {
+              pages: [{ data: notes, hasMore: false }],
+              pageParams: [undefined],
+            };
           }
-        );
+          // Merge listener data into first page without clobbering pagination state
+          const existingIds = new Set(old.pages[0].data.map((n: any) => n.id));
+          const merged = [...old.pages[0].data];
+          for (const note of notes) {
+            if (!existingIds.has(note.id)) {
+              merged.unshift(note);
+              existingIds.add(note.id);
+            }
+          }
+          return {
+            ...old,
+            pages: [{ ...old.pages[0], data: merged }, ...old.pages.slice(1)],
+          };
+        });
+      }
+    );
 
-        // Cleanup function
-        return () => unsubscribe();
-      });
-    },
-    enabled: !!(location.latitude && location.longitude),
-    staleTime: Infinity,
-    gcTime: Infinity,
-  });
+    unsubscribeRef.current = unsubscribe;
+
+    return () => {
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+        unsubscribeRef.current = null;
+      }
+    };
+  }, [location.latitude, location.longitude, searchRadius, queryClient]);
 };
 
 // Mutations
@@ -120,7 +136,7 @@ export const useCreateNote = () => {
     mutationFn: (request: CreateNoteRequest) => noteUseCase.createNote(request),
     onSuccess: (newNote) => {
       // Add to nearby notes cache
-      if (location.latitude && location.longitude) {
+      if (location.latitude !== null && location.longitude !== null) {
         const queryKey = noteKeys.nearby(
           location.latitude, 
           location.longitude, 

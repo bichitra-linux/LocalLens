@@ -10,7 +10,6 @@ export interface Note {
   username: string;
   userAvatar?: string;
   content: string;
-  imageUrl?: string;
   location: Location;
   createdAt: Date;
   expiresAt: Date;
@@ -19,20 +18,21 @@ export interface Note {
   commentsCount: number;
   isActive: boolean;
   hasUserVoted?: 'up' | 'down' | null;
+  category?: string;
+  reactionCounts?: Record<string, number>;
 }
 
 export interface CreateNoteRequest {
   content: string;
-  imageUri?: string;
   location: {
     latitude: number;
     longitude: number;
   };
   expiresInDays?: number;
+  category?: string;
 }
 
 export interface UpdateNoteRequest {
   id: string;
   content?: string;
-  imageUri?: string;
 }
