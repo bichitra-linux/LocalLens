@@ -5,7 +5,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNearbyNotes, useNearbyNotesListener } from '../hooks/useNotes';
 import { locationService } from '../../utils/locationService';
 import { getMapStyle } from '../../utils/mapConfig';
-import { calculateDistance } from '../../utils/geospatial';
 import { Note } from '../../domain/entities/Note';
 import { useTheme } from '../hooks/useTheme';
 import { ThemeColors } from '../../utils/theme';
@@ -32,80 +31,24 @@ interface MapScreenProps {
   routeGeometry?: GeoJSON.Feature<GeoJSON.LineString> | null;
 }
 
-const clusterNotes = (notes: Note[], radiusKm: number = 5): Cluster[] => {
-  if (notes.length === 0) return [];
-
-  const clusters: Cluster[] = [];
-  const assigned = new Set<string>();
-
-  for (const note of notes) {
-    if (assigned.has(note.id)) continue;
-
-    const cluster: Cluster = {
-      notes: [note],
-      latitude: note.location.latitude,
-      longitude: note.location.longitude,
-    };
-    assigned.add(note.id);
-
-    for (const other of notes) {
-      if (assigned.has(other.id)) continue;
-
-      const distance = calculateDistance(
-        note.location.latitude,
-        note.location.longitude,
-        other.location.latitude,
-        other.location.longitude
-      );
-
-      if (distance <= radiusKm) {
-        cluster.notes.push(other);
-        assigned.add(other.id);
-      }
-    }
-
-    if (cluster.notes.length > 1) {
-      cluster.latitude =
-        cluster.notes.reduce((sum, n) => sum + n.location.latitude, 0) / cluster.notes.length;
-      cluster.longitude =
-        cluster.notes.reduce((sum, n) => sum + n.location.longitude, 0) / cluster.notes.length;
-    }
-
-    clusters.push(cluster);
-  }
-
-  return clusters;
-};
-
-const notesToGeoJSON = (clusters: Cluster[]): GeoJSON.FeatureCollection => ({
+const notesToGeoJSON = (notes: Note[]): GeoJSON.FeatureCollection => ({
   type: 'FeatureCollection',
-  features: clusters.map((cluster) => ({
+  features: notes.map((note) => ({
     type: 'Feature',
     geometry: {
       type: 'Point',
-      coordinates: [cluster.longitude, cluster.latitude],
+      coordinates: [note.location.longitude, note.location.latitude],
     },
     properties: {
-      id: cluster.notes.length > 1
-        ? `cluster-${cluster.latitude.toFixed(4)}-${cluster.longitude.toFixed(4)}`
-        : cluster.notes[0].id,
-      isCluster: cluster.notes.length > 1,
-      count: cluster.notes.length,
-      title: cluster.notes.length > 1
-        ? `${cluster.notes.length} notes`
-        : cluster.notes[0].username,
-      description: cluster.notes.length > 1
-        ? 'Tap to explore nearby notes'
-        : cluster.notes[0].content.substring(0, 50) +
-          (cluster.notes[0].content.length > 50 ? '...' : ''),
-      noteId: cluster.notes.length === 1 ? cluster.notes[0].id : null,
-      color: cluster.notes.length > 1
-        ? '#9C27B0'
-        : cluster.notes[0].hasUserVoted === 'up'
-          ? '#4CAF50'
-          : cluster.notes[0].hasUserVoted === 'down'
-            ? '#f44336'
-            : '#2196F3',
+      noteId: note.id,
+      title: note.username,
+      description: note.content.substring(0, 50) +
+        (note.content.length > 50 ? '...' : ''),
+      color: note.hasUserVoted === 'up'
+        ? '#4CAF50'
+        : note.hasUserVoted === 'down'
+          ? '#f44336'
+          : '#2196F3',
     },
   })),
 });
@@ -124,12 +67,6 @@ const markerStyle = {
 };
 
 const clusterStyle = {
-  textField: ['get', 'count'],
-  textSize: 14,
-  textColor: '#ffffff',
-  textHaloColor: '#9C27B0',
-  textHaloWidth: 2,
-  textAnchor: 'center',
   circleRadius: 18,
   circleColor: '#9C27B0',
   circleStrokeWidth: 2,
@@ -148,6 +85,7 @@ export const MapScreen: React.FC<MapScreenProps> = ({ onNotePress, onMapPress, r
   const [region, setRegion] = useState<{ latitude: number; longitude: number } | null>(null);
   const [componentsInitialized, setComponentsInitialized] = useState(false);
   const mapRef = useRef<any>(null);
+  const cameraRef = useRef<any>(null);
 
   useNearbyNotesListener();
 
@@ -203,20 +141,13 @@ export const MapScreen: React.FC<MapScreenProps> = ({ onNotePress, onMapPress, r
       if (onMapPress) {
         let coordinate;
 
-        if (Platform.OS === 'web') {
-          const lat = event.latlng?.lat ?? event.latitude;
-          const lng = event.latlng?.lng ?? event.longitude;
-          if (lat === undefined || lng === undefined) return;
-          coordinate = { latitude: lat, longitude: lng };
+        const coords = event.geometry?.coordinates;
+        if (coords) {
+          coordinate = { latitude: coords[1], longitude: coords[0] };
         } else {
-          const coords = event.geometry?.coordinates;
-          if (coords) {
-            coordinate = { latitude: coords[1], longitude: coords[0] };
-          } else {
-            coordinate = event.nativeEvent?.coordinate || event;
-          }
-          if (!coordinate?.latitude || !coordinate?.longitude) return;
+          coordinate = event.nativeEvent?.coordinate || event;
         }
+        if (coordinate?.latitude === undefined || coordinate?.longitude === undefined) return;
 
         onMapPress(coordinate);
       }
@@ -233,32 +164,7 @@ export const MapScreen: React.FC<MapScreenProps> = ({ onNotePress, onMapPress, r
     [onNotePress]
   );
 
-  const clusters = useMemo(() => clusterNotes(allNotes), [allNotes]);
-
-  const notesGeoJSON = useMemo(() => notesToGeoJSON(clusters), [clusters]);
-
-  const clusterFeatures = useMemo(
-    () =>
-      clusters
-        .filter((c) => c.notes.length > 1)
-        .map(
-          (c): GeoJSON.Feature => ({
-            type: 'Feature',
-            geometry: { type: 'Point', coordinates: [c.longitude, c.latitude] },
-            properties: {
-              id: `cluster-${c.latitude.toFixed(4)}-${c.longitude.toFixed(4)}`,
-              count: c.notes.length,
-              title: `${c.notes.length} notes`,
-            },
-          })
-        ),
-    [clusters]
-  );
-
-  const clusterGeoJSON: GeoJSON.FeatureCollection = useMemo(
-    () => ({ type: 'FeatureCollection', features: clusterFeatures }),
-    [clusterFeatures]
-  );
+  const notesGeoJSON = useMemo(() => notesToGeoJSON(allNotes), [allNotes]);
 
   const renderNativeMap = () => {
     if (!MapLibreGL) return null;
@@ -273,6 +179,7 @@ export const MapScreen: React.FC<MapScreenProps> = ({ onNotePress, onMapPress, r
         onDidFinishLoadingMap={handleMapReady}
       >
         <MapLibreGL.Camera
+          ref={cameraRef}
           followUserLocation={!region}
           followZoomLevel={14}
           centerCoordinate={
@@ -289,7 +196,16 @@ export const MapScreen: React.FC<MapScreenProps> = ({ onNotePress, onMapPress, r
           onPress={(e: any) => {
             const feature = e.features?.[0];
             if (!feature) return;
-            const noteId = feature.properties?.noteId;
+            const props = feature.properties || {};
+            if (props.point_count) {
+              cameraRef.current?.setCamera({
+                centerCoordinate: feature.geometry.coordinates,
+                zoomLevel: 15,
+                animationDuration: 500,
+              });
+              return;
+            }
+            const noteId = props.noteId;
             if (noteId) {
               const note = allNotes.find((n) => n.id === noteId);
               if (note) handleMarkerPress(note);

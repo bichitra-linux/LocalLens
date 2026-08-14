@@ -1,75 +1,107 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+    // Users: read/write own doc only, field whitelist, no stat forging
     match /users/{userId} {
-      allow read: if request.auth != null;
-      allow write: if request.auth != null && request.auth.uid == userId;
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasAll(['id', 'username', 'email', 'displayName', 'createdAt', 'lastActiveAt', 'notesCount', 'votesCount'])
+        && request.resource.data.username is string && request.resource.data.username.size() <= 30
+        && request.resource.data.displayName is string && request.resource.data.displayName.size() <= 50
+        && request.resource.data.email is string
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.lastActiveAt is timestamp
+        && request.resource.data.notesCount is number
+        && request.resource.data.votesCount is number;
+      allow update: if request.auth != null && request.auth.uid == userId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['username', 'displayName', 'avatarUrl', 'lastActiveAt'])
+        && request.resource.data.username is string && request.resource.data.username.size() <= 30
+        && request.resource.data.displayName is string && request.resource.data.displayName.size() <= 50
+        && (request.resource.data.avatarUrl is string || request.resource.data.avatarUrl is null || !('avatarUrl' in request.resource.data))
+        && request.resource.data.lastActiveAt is timestamp;
+      allow delete: if request.auth != null && request.auth.uid == userId;
     }
-    
+
+    // Notes: counters are server-maintained via triggers, never client-writable
     match /notes/{noteId} {
       allow read: if request.auth != null && resource.data.isActive == true;
-      allow create: if request.auth != null 
+      allow create: if request.auth != null
         && request.auth.uid == request.resource.data.userId
-        && request.resource.data.keys().hasAll(['content', 'latitude', 'longitude', 'geohash', 'userId', 'createdAt', 'expiresAt'])
-        && request.resource.data.content is string 
+        && request.resource.data.keys().hasAll(['content', 'latitude', 'longitude', 'geohash', 'userId', 'createdAt', 'expiresAt', 'username'])
+        && request.resource.data.content is string
         && request.resource.data.content.size() <= 500
+        && request.resource.data.username is string
+        && request.resource.data.username.size() <= 30
         && request.resource.data.latitude is number
         && request.resource.data.longitude is number
         && request.resource.data.latitude >= -90 && request.resource.data.latitude <= 90
         && request.resource.data.longitude >= -180 && request.resource.data.longitude <= 180
         && request.resource.data.geohash is string
         && request.resource.data.userId is string
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt > request.resource.data.createdAt
         && request.resource.data.isActive == true;
-      allow update: if request.auth != null 
+      allow update: if request.auth != null
         && request.auth.uid == resource.data.userId
-        && request.resource.data.latitude == resource.data.latitude
-        && request.resource.data.longitude == resource.data.longitude
-        && request.resource.data.userId == resource.data.userId
-        && request.resource.data.isActive == resource.data.isActive
-        && request.resource.data.upvotes == resource.data.upvotes
-        && request.resource.data.downvotes == resource.data.downvotes
-        && request.resource.data.commentsCount == resource.data.commentsCount;
-      allow delete: if request.auth != null 
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['content', 'username', 'userAvatar', 'isActive', 'updatedAt'])
+        && request.resource.data.content is string
+        && request.resource.data.content.size() <= 500;
+      allow delete: if request.auth != null
         && request.auth.uid == resource.data.userId;
     }
-    
+
+    // Votes: no self-votes, note must exist, type bounded
     match /votes/{voteId} {
       allow read: if request.auth != null;
-      allow create: if request.auth != null 
+      allow create: if request.auth != null
         && request.auth.uid == request.resource.data.userId
         && request.resource.data.keys().hasAll(['userId', 'noteId', 'type', 'createdAt'])
         && request.resource.data.type in ['up', 'down']
-        && request.resource.data.createdAt is timestamp;
-      allow update: if request.auth != null 
+        && request.resource.data.createdAt is timestamp
+        && get(/databases/$(database)/documents/notes/$(request.resource.data.noteId)).data.userId != request.auth.uid;
+      allow update: if request.auth != null
         && request.auth.uid == resource.data.userId
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['type', 'updatedAt']);
-      allow delete: if request.auth != null 
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['type', 'updatedAt'])
+        && request.resource.data.type in ['up', 'down']
+        && request.resource.data.updatedAt is timestamp;
+      allow delete: if request.auth != null
         && request.auth.uid == resource.data.userId;
     }
-    
+
     match /comments/{commentId} {
       allow read: if request.auth != null;
-      allow create: if request.auth != null 
+      allow create: if request.auth != null
         && request.auth.uid == request.resource.data.userId
         && request.resource.data.keys().hasAll(['userId', 'noteId', 'content', 'createdAt'])
         && request.resource.data.content is string
         && request.resource.data.content.size() <= 280
         && request.resource.data.createdAt is timestamp;
-      allow update: if request.auth != null 
+      allow update: if request.auth != null
         && request.auth.uid == resource.data.userId
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['content', 'updatedAt']);
-      allow delete: if request.auth != null 
+      allow delete: if request.auth != null
         && request.auth.uid == resource.data.userId;
     }
 
+    // Reactions: emoji allowlist so unvalidated strings can't
+    // become reactionCounts field names via the trigger
     match /reactions/{reactionId} {
       allow read: if request.auth != null;
       allow create: if request.auth != null
         && request.auth.uid == request.resource.data.userId
-        && request.resource.data.emoji is string
-        && request.resource.data.noteId is string;
+        && request.resource.data.keys().hasAll(['userId', 'noteId', 'emoji', 'createdAt'])
+        && request.resource.data.emoji in ['👍', '❤️', '😂', '😮', '🎉', '🔥']
+        && request.resource.data.noteId is string
+        && request.resource.data.createdAt is timestamp;
       allow update, delete: if request.auth != null
         && request.auth.uid == resource.data.userId;
+    }
+
+    // Server-managed username registry — clients never touch it
+    match /usernames/{name} {
+      allow read, write: if false;
     }
   }
 }

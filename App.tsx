@@ -3,7 +3,7 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { QueryProvider } from './src/presentation/store/queryClient';
 import { AppNavigator } from './src/presentation/navigation/AppNavigator';
-import { OfflineSyncService, GeospatialPollingService } from './src/utils/criticalSolutions';
+import { GeospatialPollingService } from './src/utils/criticalSolutions';
 import { OfflineQueueService } from './src/utils/offlineQueue';
 import { ErrorBoundary } from './src/presentation/components/ErrorBoundary';
 import { OfflineBanner } from './src/presentation/components/OfflineBanner';
@@ -24,11 +24,9 @@ const AppContent: React.FC = () => {
 
   useEffect(() => {
     const pollingService = GeospatialPollingService.getInstance();
-    const offlineSyncService = OfflineSyncService.getInstance();
     const offlineQueueService = OfflineQueueService.getInstance();
 
     if (user && !servicesStarted.current) {
-      offlineSyncService.setupAutoSync();
       offlineQueueService.setupAutoProcess();
       pollingService.startIntelligentPolling();
       servicesStarted.current = true;
@@ -36,7 +34,6 @@ const AppContent: React.FC = () => {
 
     if (!user && servicesStarted.current) {
       pollingService.destroy();
-      offlineSyncService.destroy();
       offlineQueueService.destroy();
       servicesStarted.current = false;
     }
@@ -44,7 +41,6 @@ const AppContent: React.FC = () => {
     return () => {
       if (servicesStarted.current) {
         pollingService.destroy();
-        offlineSyncService.destroy();
         offlineQueueService.destroy();
         servicesStarted.current = false;
       }

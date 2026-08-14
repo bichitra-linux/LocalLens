@@ -166,7 +166,7 @@ describe('NoteUseCase', () => {
         data: notes,
         hasMore: false,
       });
-      mockInteractionRepository.getUserVote.mockResolvedValue(mockVote);
+      mockInteractionRepository.getUserVotes.mockResolvedValue(new Map([['note-1', 'up']]));
 
       const result = await noteUseCase.getNearbyNotes(40.7128, -74.006, 5);
 
@@ -179,7 +179,7 @@ describe('NoteUseCase', () => {
         data: notes,
         hasMore: false,
       });
-      mockInteractionRepository.getUserVote.mockResolvedValue(null);
+      mockInteractionRepository.getUserVotes.mockResolvedValue(new Map());
 
       const result = await noteUseCase.getNearbyNotes(40.7128, -74.006, 5);
 
@@ -311,7 +311,7 @@ describe('NoteUseCase', () => {
         createdAt: new Date(),
       };
 
-      mockInteractionRepository.getUserVote.mockResolvedValue(mockVote);
+      mockInteractionRepository.getUserVotes.mockResolvedValue(new Map([['note-1', 'up']]));
       mockNoteRepository.listenToNotesInArea.mockImplementation((query, callback) => {
         setTimeout(() => callback(notes), 10);
         return jest.fn();

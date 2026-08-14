@@ -21,6 +21,8 @@ import {
   User as FirebaseUser,
   EmailAuthProvider,
   deleteUser as deleteFirebaseUser,
+  updateProfile,
+  reauthenticateWithCredential,
 } from 'firebase/auth';
 import { Platform } from 'react-native';
 import { auth, firestore } from '../../core/firebase';
@@ -31,9 +33,20 @@ import { FirebaseUserDoc, Collections } from '../models/FirebaseModels';
 export class FirebaseUserRepository implements UserRepository {
   private currentUser: User | null = null;
   private unsubscribeAuth: (() => void) | null = null;
+  private authReadyResolve: (() => void) | null = null;
+  private authReadyPromise: Promise<void>;
 
   constructor() {
+    // Resolves on the first onAuthStateChanged emission so cold-start
+    // getCurrentUser() calls wait for the session restore to finish.
+    this.authReadyPromise = new Promise<void>((resolve) => {
+      this.authReadyResolve = resolve;
+    });
+
     this.unsubscribeAuth = onAuthStateChanged(auth, async (firebaseUser) => {
+      this.authReadyResolve?.();
+      this.authReadyResolve = null;
+
       try {
         if (firebaseUser) {
           this.currentUser = await this.getUserById(firebaseUser.uid);
@@ -53,6 +66,8 @@ export class FirebaseUserRepository implements UserRepository {
   }
 
   async getCurrentUser(): Promise<User | null> {
+    await this.authReadyPromise;
+
     if (auth.currentUser) {
       this.currentUser = await this.getUserById(auth.currentUser.uid);
     } else {
@@ -115,7 +130,6 @@ export class FirebaseUserRepository implements UserRepository {
       const updateData: Partial<FirebaseUserDoc> = {};
 
       if (updates.username) updateData.username = updates.username;
-      if (updates.email) updateData.email = updates.email;
       if (updates.displayName) updateData.displayName = updates.displayName;
       if (updates.avatarUrl !== undefined) updateData.avatarUrl = updates.avatarUrl;
       if (updates.notesCount !== undefined) updateData.notesCount = updates.notesCount;
@@ -125,23 +139,20 @@ export class FirebaseUserRepository implements UserRepository {
 
       await updateDoc(docRef, updateData);
 
+      // Keep Firebase Auth displayName in sync so new notes use the updated name
+      if (updates.displayName && auth.currentUser) {
+        try {
+          await updateProfile(auth.currentUser, { displayName: updates.displayName });
+        } catch (error) {
+          console.warn('[Auth] Failed to update Auth displayName:', error);
+        }
+      }
+
       if (this.currentUser && this.currentUser.id === id) {
         this.currentUser = { ...this.currentUser, ...updates };
       }
     } catch (error) {
       console.error('Error updating user:', error);
-      throw error;
-    }
-  }
-
-  async deleteUser(id: string): Promise<void> {
-    try {
-      await deleteDoc(doc(firestore, Collections.USERS, id));
-      if (this.currentUser && this.currentUser.id === id) {
-        this.currentUser = null;
-      }
-    } catch (error) {
-      console.error('Error deleting user:', error);
       throw error;
     }
   }
@@ -203,6 +214,8 @@ export class FirebaseUserRepository implements UserRepository {
           });
 
           user = await this.getUserById(result.user.uid);
+        } else {
+          user = await this.refreshGoogleProfile(user, result.user.displayName, result.user.photoURL);
         }
 
         if (!user) {
@@ -232,6 +245,8 @@ export class FirebaseUserRepository implements UserRepository {
             });
 
             user = await this.getUserById(userCredential.user.uid);
+          } else {
+            user = await this.refreshGoogleProfile(user, userCredential.user.displayName, userCredential.user.photoURL);
           }
 
           if (!user) {
@@ -277,46 +292,39 @@ export class FirebaseUserRepository implements UserRepository {
     }
   }
 
-  async createAnonymousUser(uid: string): Promise<User> {
-    try {
-      const existingUser = await this.getUserById(uid);
-      if (existingUser) {
-        this.currentUser = existingUser;
-        return existingUser;
-      }
-
-      return await this.createUser({
-        id: uid,
-        email: '',
-        displayName: 'Anonymous User',
-        username: `anon_${uid.substring(0, 8)}`,
-      });
-    } catch (error) {
-      console.error('Error creating anonymous user:', error);
-      throw error;
-    }
-  }
-
   async deleteUser(userId: string, email: string, password: string): Promise<void> {
     try {
-      if (!auth.currentUser) {
+      const firebaseUser = auth.currentUser;
+      if (!firebaseUser) {
         throw new Error('No authenticated user');
       }
 
-      // Re-authenticate user before deletion (Firebase security requirement)
-      const credential = EmailAuthProvider.credential(email, password);
-      await auth.currentUser.reauthenticateWithCredential(credential);
+      // Re-authenticate user before deletion (Firebase security requirement).
+      // Google accounts can't re-auth with email/password, so use the provider credential.
+      const providerId = firebaseUser.providerData[0]?.providerId;
+      if (providerId === 'google.com') {
+        const { GoogleSignin } = require('@react-native-google-signin/google-signin');
+        await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+        const googleUser = await GoogleSignin.signIn({ forceConsentPrompt: true });
+        const { idToken } = googleUser;
+        if (!idToken) {
+          throw new Error('Google re-authentication failed');
+        }
+        const credential = GoogleAuthProvider.credential(idToken);
+        await reauthenticateWithCredential(firebaseUser, credential);
+      } else {
+        const credential = EmailAuthProvider.credential(email, password);
+        await reauthenticateWithCredential(firebaseUser, credential);
+      }
 
       // Delete user data from Firestore first
       await this.deleteUserData(userId);
 
       // Delete Firebase Auth account
-      await deleteFirebaseUser(auth.currentUser);
+      await deleteFirebaseUser(firebaseUser);
 
       // Clear local state
       this.currentUser = null;
-      this.unsubscribeAuth?.();
-      this.unsubscribeAuth = null;
     } catch (error: any) {
       console.error('Error deleting user:', error);
       
@@ -347,11 +355,7 @@ export class FirebaseUserRepository implements UserRepository {
       const notesSnapshot = await getDocs(userNotesQuery);
       
       const deleteNotePromises = notesSnapshot.docs.map(doc => 
-        updateDoc(doc.ref, { 
-          isActive: false,
-          userId: 'deleted',
-          username: 'Deleted User',
-        })
+        updateDoc(doc.ref, { isActive: false })
       );
       await Promise.all(deleteNotePromises);
 
@@ -377,11 +381,39 @@ export class FirebaseUserRepository implements UserRepository {
       );
       await Promise.all(deleteVotePromises);
 
+      // Delete user's reactions
+      const userReactionsQuery = query(
+        collection(firestore, Collections.REACTIONS),
+        where('userId', '==', userId)
+      );
+      const reactionsSnapshot = await getDocs(userReactionsQuery);
+      const deleteReactionPromises = reactionsSnapshot.docs.map(doc =>
+        deleteDoc(doc.ref)
+      );
+      await Promise.all(deleteReactionPromises);
+
       console.log('[User Deletion] User data cleaned up successfully');
     } catch (error) {
       console.error('[User Deletion] Error cleaning up user data:', error);
       throw error;
     }
+  }
+
+  private async refreshGoogleProfile(
+    user: User,
+    displayName: string | null,
+    photoURL: string | null
+  ): Promise<User> {
+    const updates: Partial<User> = {
+      ...(displayName && displayName !== user.displayName ? { displayName } : {}),
+      ...(photoURL && photoURL !== user.avatarUrl ? { avatarUrl: photoURL } : {}),
+    };
+
+    if (Object.keys(updates).length > 0) {
+      await this.updateUser(user.id, updates);
+      return { ...user, ...updates };
+    }
+    return user;
   }
 
   private mapFirebaseUserToUser(firebaseUser: FirebaseUserDoc): User {

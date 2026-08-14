@@ -14,7 +14,7 @@ export const LocationIndicator: React.FC<LocationIndicatorProps> = ({ showLabel 
   const { location, locationSource } = useAppStore();
 
   const getSignalStrength = (): 'strong' | 'medium' | 'weak' | 'none' => {
-    if (!location.accuracy) return 'none';
+    if (location.accuracy === null || location.accuracy === undefined) return 'none';
     if (location.accuracy < 10) return 'strong';
     if (location.accuracy < 30) return 'medium';
     return 'weak';
@@ -44,7 +44,7 @@ export const LocationIndicator: React.FC<LocationIndicatorProps> = ({ showLabel 
   };
 
   const getLabel = (): string => {
-    if (!location.accuracy) return 'No signal';
+    if (location.accuracy === null || location.accuracy === undefined) return 'No signal';
     if (locationSource === 'gps') {
       return `GPS ${Math.round(location.accuracy)}m`;
     }

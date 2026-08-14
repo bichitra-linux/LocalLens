@@ -25,18 +25,10 @@ export class LocationService {
   async requestPermissions(): Promise<boolean> {
     try {
       const { status: foregroundStatus } = await Location.requestForegroundPermissionsAsync();
-      
+
       if (foregroundStatus !== 'granted') {
         if (__DEV__) console.log('Foreground location permission not granted');
         return false;
-      }
-
-      // Request background permissions for better experience (optional)
-      try {
-        const { status: backgroundStatus } = await Location.requestBackgroundPermissionsAsync();
-        if (__DEV__) console.log('Background location permission:', backgroundStatus);
-      } catch (error) {
-        if (__DEV__) console.log('Background permission not available:', error);
       }
 
       return true;
@@ -74,45 +66,6 @@ export class LocationService {
     } catch (error) {
       console.error('Error getting current location:', error);
       return null;
-    }
-  }
-
-  async getCurrentLocationGpsOnly(): Promise<LocationCoordinates | null> {
-    try {
-      const hasPermission = await this.requestPermissions();
-      if (!hasPermission) return null;
-
-      const location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Highest, // GPS only, no network
-      });
-
-      const coordinates: LocationCoordinates = {
-        latitude: location.coords.latitude,
-        longitude: location.coords.longitude,
-        accuracy: location.coords.accuracy,
-        timestamp: location.timestamp,
-      };
-
-      useAppStore.getState().setLocation(coordinates);
-      useAppStore.getState().setLocationSource(
-        (location.coords.accuracy ?? 99) < 20 ? 'gps' : 'network'
-      );
-
-      return coordinates;
-    } catch (error) {
-      console.error('Error getting GPS location:', error);
-      return null;
-    }
-  }
-
-  async warmUpGps(): Promise<void> {
-    try {
-      // Quick low-accuracy fix to start GPS hardware
-      await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.Low,
-      });
-    } catch {
-      // Ignore errors during warm-up
     }
   }
 

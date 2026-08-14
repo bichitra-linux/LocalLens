@@ -1,4 +1,11 @@
-import { generateGeohash, generateGeohashPrefixes, getNeighboringGeohashes, calculateDistance } from '../utils/geospatial';
+import {
+  generateGeohash,
+  generateGeohashPrefixes,
+  getNeighboringGeohashes,
+  getPrecisionForRadius,
+  calculateDistance,
+} from '../utils/geospatial';
+import ngeohash from 'ngeohash';
 
 describe('Geospatial Utilities', () => {
   describe('generateGeohash', () => {
@@ -31,6 +38,33 @@ describe('Geospatial Utilities', () => {
     it('should return 9 geohashes (center + 8 neighbors)', () => {
       const geohashes = getNeighboringGeohashes(40.7128, -74.006);
       expect(geohashes).toHaveLength(9);
+    });
+  });
+
+  describe('getPrecisionForRadius', () => {
+    it('should pick a precision whose 3x3 block covers the radius', () => {
+      const cases: [number, number][] = [
+        [5, 5],    // default radius -> precision 5 (~4.9km cells)
+        [0.5, 6],  // small radius -> precision 6 (~1.2km cells)
+        [20, 4],   // large radius -> precision 4 (~39km cells)
+      ];
+      for (const [radiusKm, expectedPrecision] of cases) {
+        expect(getPrecisionForRadius(radiusKm)).toBe(expectedPrecision);
+      }
+    });
+
+    it('should cover a 5km radius: every point inside the radius is inside the queried box', () => {
+      const lat = 40.7128;
+      const lng = -74.006;
+      const precision = getPrecisionForRadius(5);
+      const box = getNeighboringGeohashes(lat, lng, precision);
+
+      // A note exactly 4.9km away (within the 5km radius) must land in the box
+      const offset = 4.9 / 111.32; // degrees latitude for 4.9km
+      const farLat = lat + offset;
+      const farHash = ngeohash.encode(farLat, lng, precision);
+
+      expect(box).toContain(farHash);
     });
   });
 

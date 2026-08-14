@@ -210,7 +210,7 @@ export const CreateNoteScreen: React.FC = () => {
               </Text>
             </View>
 
-            {route.params?.latitude === null && route.params?.longitude === null && (
+            {route.params?.latitude == null && route.params?.longitude == null && (
               <TouchableOpacity
                 style={styles.locationButton}
                 onPress={getCurrentLocation}

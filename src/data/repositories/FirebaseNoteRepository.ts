@@ -25,8 +25,12 @@ import {
   generateGeohash,
   generateGeohashPrefixes,
   getNeighboringGeohashes,
+  getPrecisionForRadius,
   calculateDistance
 } from '../../utils/geospatial';
+import { OfflineQueueService, isOnline } from '../../utils/offlineQueue';
+
+const offlineQueue = OfflineQueueService.getInstance();
 
 export class FirebaseNoteRepository implements NoteRepository {
   async getNotesByLocation(
@@ -35,7 +39,7 @@ export class FirebaseNoteRepository implements NoteRepository {
   ): Promise<PaginatedResponse<Note>> {
     try {
       const { latitude, longitude, radiusInKm } = geoQuery;
-      const geohashesToQuery = getNeighboringGeohashes(latitude, longitude);
+      const geohashesToQuery = getNeighboringGeohashes(latitude, longitude, getPrecisionForRadius(radiusInKm));
 
       const notesCollection = collection(firestore, Collections.NOTES);
 
@@ -135,6 +139,45 @@ export class FirebaseNoteRepository implements NoteRepository {
         throw new Error('User must be authenticated to create a note');
       }
 
+      // Offline: queue the note for sync when connectivity returns
+      if (!(await isOnline())) {
+        const expiresInDays = request.expiresInDays || 7;
+        const expiresAt = new Date();
+        expiresAt.setDate(expiresAt.getDate() + expiresInDays);
+
+        await offlineQueue.enqueue({
+          type: 'create_note',
+          payload: {
+            content: request.content,
+            location: request.location,
+            expiresInDays,
+            category: request.category,
+            username: auth.currentUser.displayName || 'Anonymous',
+          },
+        });
+
+        return {
+          id: `local_${Date.now()}`,
+          userId: auth.currentUser.uid,
+          username: auth.currentUser.displayName || 'Anonymous',
+          userAvatar: auth.currentUser.photoURL ?? undefined,
+          content: request.content,
+          location: {
+            latitude: request.location.latitude,
+            longitude: request.location.longitude,
+            geohash: generateGeohash(request.location.latitude, request.location.longitude),
+          },
+          createdAt: new Date(),
+          expiresAt,
+          upvotes: 0,
+          downvotes: 0,
+          commentsCount: 0,
+          isActive: true,
+          category: request.category,
+          reactionCounts: {},
+        };
+      }
+
       const geohash = generateGeohash(request.location.latitude, request.location.longitude);
       const geohashPrefixes = generateGeohashPrefixes(geohash);
 
@@ -145,7 +188,7 @@ export class FirebaseNoteRepository implements NoteRepository {
       const noteData: Omit<FirebaseNoteDoc, 'id'> = {
         userId: auth.currentUser.uid,
         username: auth.currentUser.displayName || 'Anonymous',
-        userAvatar: auth.currentUser.photoURL ?? null,
+        userAvatar: auth.currentUser.photoURL ?? undefined,
         content: request.content,
         latitude: request.location.latitude,
         longitude: request.location.longitude,
@@ -190,6 +233,14 @@ export class FirebaseNoteRepository implements NoteRepository {
 
   async deleteNote(id: string): Promise<void> {
     try {
+      if (!(await isOnline())) {
+        await offlineQueue.enqueue({
+          type: 'delete_note',
+          payload: { noteId: id },
+        });
+        return;
+      }
+
       const docRef = doc(firestore, Collections.NOTES, id);
       await updateDoc(docRef, { isActive: false });
     } catch (error) {
@@ -203,13 +254,21 @@ export class FirebaseNoteRepository implements NoteRepository {
     callback: (notes: Note[]) => void
   ): Unsubscribe {
     const { latitude, longitude, radiusInKm } = geoQuery;
+    const geohashesToQuery = getNeighboringGeohashes(latitude, longitude, getPrecisionForRadius(radiusInKm));
 
     const notesCollection = collection(firestore, Collections.NOTES);
+
+    // Bounding-box geohash range covering the search radius
+    const minHash = geohashesToQuery.reduce((min, g) => g < min ? g : min, geohashesToQuery[0]);
+    const maxHash = geohashesToQuery.reduce((max, g) => g > max ? g : max, geohashesToQuery[0]);
+
     const q = query(
       notesCollection,
       where('isActive', '==', true),
       where('expiresAt', '>', Timestamp.now()),
-      orderBy('expiresAt'),
+      where('geohash', '>=', minHash),
+      where('geohash', '<=', maxHash + '~'),
+      orderBy('geohash'),
       orderBy('createdAt', 'desc'),
       limit(50)
     );

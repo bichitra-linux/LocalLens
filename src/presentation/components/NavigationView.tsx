@@ -18,6 +18,7 @@ export const NavigationView: React.FC<NavigationViewProps> = ({
   distanceRemaining,
   durationRemaining,
   isOnRoute,
+  arrived,
   onStopNavigation,
   formatDistance,
   formatDuration,
@@ -39,6 +40,32 @@ export const NavigationView: React.FC<NavigationViewProps> = ({
       default: return 'arrow-up';
     }
   };
+
+  if (arrived) {
+    return (
+      <View style={[styles.container, { backgroundColor: colors.card, shadowColor: colors.shadow }]}>
+        <View style={styles.mainInstruction}>
+          <Ionicons name="flag" size={32} color={colors.success} />
+          <View style={styles.instructionText}>
+            <Text style={[styles.instruction, { color: colors.text }]}>You have arrived</Text>
+            {route.destinationName && (
+              <Text style={[styles.streetName, { color: colors.textSecondary }]}>{route.destinationName}</Text>
+            )}
+          </View>
+        </View>
+
+        <TouchableOpacity
+          style={[styles.stopButton, { backgroundColor: colors.error + '15' }]}
+          onPress={onStopNavigation}
+          accessibilityLabel="End navigation"
+          accessibilityRole="button"
+        >
+          <Ionicons name="checkmark-circle" size={20} color={colors.error} />
+          <Text style={[styles.stopText, { color: colors.error }]}>Done</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.container, { backgroundColor: colors.card, shadowColor: colors.shadow }]}>

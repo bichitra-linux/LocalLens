@@ -18,10 +18,13 @@ export class RoutingService {
   }
 
   async getRoute(origin: LatLng, destination: LatLng, destinationName?: string): Promise<Route> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+
     try {
       const url = `${OSRM_BASE_URL}/route/v1/driving/${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}?overview=full&steps=true&geometries=geojson`;
 
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: controller.signal });
       if (!response.ok) {
         throw new Error(`Routing request failed: ${response.status}`);
       }
@@ -40,7 +43,7 @@ export class RoutingService {
         })),
         distance: osrmRoute.distance,
         duration: osrmRoute.duration,
-        steps: this.parseSteps(osrmRoute.legs[0].steps),
+        steps: this.parseSteps(osrmRoute.legs?.[0]?.steps ?? []),
         origin,
         destination,
         destinationName,
@@ -60,6 +63,8 @@ export class RoutingService {
         return storedRoute;
       }
       throw error;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
@@ -67,7 +72,7 @@ export class RoutingService {
     const { useAppStore } = require('../presentation/store/appStore');
     const { latitude, longitude } = useAppStore.getState().location;
     
-    if (!latitude || !longitude) {
+    if (latitude === null || longitude === null) {
       throw new Error('Current location not available');
     }
     

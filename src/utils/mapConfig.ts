@@ -83,8 +83,8 @@ export const PRESET_REGIONS: MapRegionPreset[] = [
 
 // Get the appropriate style URL for the current platform
 export const getMapStyle = (): string => {
-  // Web uses a different rendering approach, but same style URLs work
-  return MAP_STYLES.default;
+  // Demo style in dev, real streets style in production (also used for offline packs)
+  return __DEV__ ? MAP_STYLES.default : MAP_STYLES.streets;
 };
 
 

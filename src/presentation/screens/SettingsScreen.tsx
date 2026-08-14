@@ -502,7 +502,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   themeButtonTextActive: {
-    color: colors.text,
+    color: '#ffffff',
   },
   sliderRow: {
     flexDirection: 'row',

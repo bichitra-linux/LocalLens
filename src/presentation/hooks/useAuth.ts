@@ -1,6 +1,8 @@
 import { useQuery, useMutation, useQueryClient, useInfiniteQuery } from '@tanstack/react-query';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { AuthUseCase } from '../../domain/usecases/AuthUseCase';
 import { User, CreateUserRequest } from '../../domain/entities/User';
+import { useAppStore } from '../store/appStore';
 
 // Dependency injection - these would be provided by DI container
 import { FirebaseUserRepository } from '../../data/repositories/FirebaseUserRepository';
@@ -82,8 +84,15 @@ export const useSignOut = () => {
   return useMutation({
     mutationFn: () => authUseCase.signOut(),
     onSuccess: () => {
-      queryClient.removeQueries({ queryKey: authKeys.all });
-      queryClient.setQueryData(authKeys.currentUser, null);
+      queryClient.clear();
+      useAppStore.getState().clearUser();
+
+      // Drop user-scoped offline data so the next user starts clean
+      AsyncStorage.multiRemove([
+        'locallens_offline_queue',
+        'locallens_offline_notes',
+        'locallens_cached_notes',
+      ]);
     },
   });
 };
@@ -96,14 +105,20 @@ export const useUpdateProfile = () => {
       authUseCase.updateProfile(userId, updates),
     onSuccess: (_, { userId, updates }) => {
       // Update current user cache
-      queryClient.setQueryData(authKeys.currentUser, (old: User | null) => 
+      queryClient.setQueryData(authKeys.currentUser, (old: User | null) =>
         old && old.id === userId ? { ...old, ...updates } : old
       );
-      
+
       // Update specific user cache
-      queryClient.setQueryData(authKeys.user(userId), (old: User | null) => 
+      queryClient.setQueryData(authKeys.user(userId), (old: User | null) =>
         old ? { ...old, ...updates } : old
       );
+
+      // Push to zustand so ProfileScreen reflects changes immediately
+      const storeUser = useAppStore.getState().user;
+      if (storeUser && storeUser.id === userId) {
+        useAppStore.getState().setUser({ ...storeUser, ...updates });
+      }
     },
   });
 };
@@ -117,6 +132,7 @@ export const useDeleteAccount = () => {
     onSuccess: () => {
       // Clear all queries from cache
       queryClient.clear();
+      useAppStore.getState().clearUser();
     },
   });
 };

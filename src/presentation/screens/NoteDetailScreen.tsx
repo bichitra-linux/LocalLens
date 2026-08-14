@@ -41,7 +41,7 @@ export const NoteDetailScreen: React.FC = () => {
   const [commentText, setCommentText] = useState('');
   const headerHeight = useHeaderHeight();
 
-  const { data: note, isLoading: noteLoading } = useNote(noteId);
+  const { data: note, isLoading: noteLoading, refetch: refetchNote } = useNote(noteId);
   const { data: commentsData, fetchNextPage, hasNextPage } = useComments(noteId);
   const voteOnNoteMutation = useVoteOnNote();
   const addCommentMutation = useAddComment();
@@ -138,7 +138,15 @@ export const NoteDetailScreen: React.FC = () => {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
         <View style={styles.center}>
-          <Text>Note not found</Text>
+          <Text style={{ color: colors.textSecondary, marginBottom: 16 }}>Note not found</Text>
+          <TouchableOpacity
+            style={[styles.retryButton, { backgroundColor: colors.primary }]}
+            onPress={() => refetchNote()}
+            accessibilityLabel="Retry loading note"
+            accessibilityRole="button"
+          >
+            <Text style={[styles.retryButtonText, { color: colors.surface }]}>Retry</Text>
+          </TouchableOpacity>
         </View>
       </SafeAreaView>
     );
@@ -357,6 +365,15 @@ const createStyles = (colors: ThemeColors) => StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  retryButton: {
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  retryButtonText: {
+    fontSize: 16,
+    fontWeight: '600',
   },
   scrollView: {
     flex: 1,

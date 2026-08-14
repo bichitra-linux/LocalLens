@@ -70,6 +70,7 @@ export const NavigationScreen: React.FC = () => {
     durationRemaining,
     isOnRoute,
     offRouteDistance,
+    arrived,
     isLoading,
     error,
     startNavigation,
@@ -81,8 +82,16 @@ export const NavigationScreen: React.FC = () => {
   useEffect(() => {
     initializeMapComponents();
     setComponentsInitialized(true);
-    startNavigation(destination, destinationName);
   }, []);
+
+  const locationReady = location.latitude !== null && location.longitude !== null;
+  const startedRef = useRef(false);
+
+  useEffect(() => {
+    if (!locationReady || startedRef.current) return;
+    startedRef.current = true;
+    startNavigation(destination, destinationName);
+  }, [locationReady, destination, destinationName, startNavigation]);
 
   const routeGeoJSON = useMemo((): GeoJSON.Feature<GeoJSON.LineString> | null => {
     if (!navRoute || navRoute.geometry.length < 2) return null;
@@ -109,11 +118,6 @@ export const NavigationScreen: React.FC = () => {
       },
     ],
   }), [destination, destinationName]);
-
-  const routeLineCoords = useMemo((): [number, number][] => {
-    if (!navRoute) return [];
-    return navRoute.geometry.map((p: LatLng) => [p.latitude, p.longitude]);
-  }, [navRoute]);
 
   const mapCenter: [number, number] | null =
     location.latitude !== null && location.longitude !== null
@@ -221,6 +225,7 @@ export const NavigationScreen: React.FC = () => {
           currentSpeed={0}
           isOnRoute={isOnRoute}
           offRouteDistance={offRouteDistance}
+          arrived={arrived}
           onStopNavigation={stopNavigation}
           formatDistance={formatDistance}
           formatDuration={formatDuration}

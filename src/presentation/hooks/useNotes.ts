@@ -79,7 +79,7 @@ export const useNearbyNotesListener = () => {
   const unsubscribeRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
-    if (!location.latitude || !location.longitude) return;
+    if (location.latitude === null || location.longitude === null) return;
 
     // Clean up previous listener
     if (unsubscribeRef.current) {

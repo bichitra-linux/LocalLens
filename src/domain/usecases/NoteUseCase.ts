@@ -108,16 +108,13 @@ export class NoteUseCase {
     };
 
     return this.noteRepository.listenToNotesInArea(query, async (notes) => {
-      // Enrich notes with user vote status
-      const enrichedNotes = await Promise.all(
-        notes.map(async (note) => {
-          const userVote = await this.interactionRepository.getUserVote(note.id);
-          return {
-            ...note,
-            hasUserVoted: userVote?.type || null,
-          };
-        })
-      );
+      // Enrich notes with user vote status via batched query
+      const noteIds = notes.map(n => n.id);
+      const voteMap = noteIds.length > 0 ? await this.interactionRepository.getUserVotes(noteIds) : new Map();
+      const enrichedNotes = notes.map(note => ({
+        ...note,
+        hasUserVoted: voteMap.get(note.id) || null,
+      }));
 
       callback(enrichedNotes);
     });

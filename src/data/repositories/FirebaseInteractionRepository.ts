@@ -2,7 +2,6 @@ import {
   collection,
   doc,
   getDoc,
-  addDoc,
   deleteDoc,
   query,
   where,
@@ -10,9 +9,8 @@ import {
   limit,
   startAfter,
   getDocs,
-  writeBatch,
+  setDoc,
   runTransaction,
-  increment,
   Timestamp,
   QueryDocumentSnapshot,
 } from 'firebase/firestore';
@@ -21,6 +19,9 @@ import { InteractionRepository } from '../../domain/repositories/InteractionRepo
 import { Vote, Comment, CreateVoteRequest, CreateCommentRequest } from '../../domain/entities/Interaction';
 import { PaginatedResponse } from '../../domain/entities/Common';
 import { FirebaseVoteDoc, FirebaseCommentDoc, Collections } from '../models/FirebaseModels';
+import { OfflineQueueService, isOnline } from '../../utils/offlineQueue';
+
+const offlineQueue = OfflineQueueService.getInstance();
 
 export class FirebaseInteractionRepository implements InteractionRepository {
   async voteOnNote(request: CreateVoteRequest): Promise<void> {
@@ -29,6 +30,17 @@ export class FirebaseInteractionRepository implements InteractionRepository {
         throw new Error('User must be authenticated to vote');
       }
 
+      // Offline: queue the vote for sync when connectivity returns
+      if (!(await isOnline())) {
+        await offlineQueue.enqueue({
+          type: 'vote',
+          payload: { noteId: request.noteId, voteType: request.type },
+        });
+        return;
+      }
+
+      // ponytail: counter updates (upvotes/downvotes/votesCount) are handled
+      // by Cloud Function triggers on the votes collection — see functions/index.js.
       await runTransaction(firestore, async (transaction) => {
         const votesCollection = collection(firestore, Collections.VOTES);
         const existingQuery = query(
@@ -43,20 +55,14 @@ export class FirebaseInteractionRepository implements InteractionRepository {
         if (!existingSnap.empty) {
           existingVote = this.mapFirebaseVoteToVote(existingSnap.docs[0].data() as FirebaseVoteDoc);
 
+          // Same type = toggle off
           if (existingVote.type === request.type) {
             transaction.delete(existingSnap.docs[0].ref);
-            const noteRef = doc(firestore, Collections.NOTES, request.noteId);
-            const decrement = request.type === 'up' ? { upvotes: increment(-1) } : { downvotes: increment(-1) };
-            transaction.update(noteRef, decrement);
-            const userRef = doc(firestore, Collections.USERS, auth.currentUser!.uid);
-            transaction.update(userRef, { votesCount: increment(-1) });
             return;
           }
 
+          // Type switch = replace vote doc
           transaction.delete(existingSnap.docs[0].ref);
-          const noteRef = doc(firestore, Collections.NOTES, request.noteId);
-          const reverseDecrement = existingVote.type === 'up' ? { upvotes: increment(-1) } : { downvotes: increment(-1) };
-          transaction.update(noteRef, reverseDecrement);
         }
 
         const voteData: Omit<FirebaseVoteDoc, 'id'> = {
@@ -68,15 +74,6 @@ export class FirebaseInteractionRepository implements InteractionRepository {
 
         const voteRef = doc(collection(firestore, Collections.VOTES));
         transaction.set(voteRef, { ...voteData, id: voteRef.id });
-
-        const noteRef = doc(firestore, Collections.NOTES, request.noteId);
-        const voteIncrement = request.type === 'up' ? { upvotes: increment(1) } : { downvotes: increment(1) };
-        transaction.update(noteRef, voteIncrement);
-
-        if (!existingVote) {
-          const userRef = doc(firestore, Collections.USERS, auth.currentUser!.uid);
-          transaction.update(userRef, { votesCount: increment(1) });
-        }
       });
     } catch (error) {
       console.error('Error voting on note:', error);
@@ -90,29 +87,21 @@ export class FirebaseInteractionRepository implements InteractionRepository {
         throw new Error('User must be authenticated to remove vote');
       }
 
+      if (!(await isOnline())) {
+        await offlineQueue.enqueue({
+          type: 'remove_vote',
+          payload: { noteId },
+        });
+        return;
+      }
+
       const existingVote = await this.getUserVote(noteId);
       if (!existingVote) {
         return;
       }
 
-      const batch = writeBatch(firestore);
-
-      // Delete vote
-      const voteRef = doc(firestore, Collections.VOTES, existingVote.id);
-      batch.delete(voteRef);
-
-      // Update note vote counts
-      const noteRef = doc(firestore, Collections.NOTES, noteId);
-      const voteDecrement = existingVote.type === 'up' 
-        ? { upvotes: increment(-1) } 
-        : { downvotes: increment(-1) };
-      batch.update(noteRef, voteDecrement);
-
-      // Update user vote count
-      const userRef = doc(firestore, Collections.USERS, auth.currentUser.uid);
-      batch.update(userRef, { votesCount: increment(-1) });
-
-      await batch.commit();
+      // Counter decrement happens via the votes onDelete trigger
+      await deleteDoc(doc(firestore, Collections.VOTES, existingVote.id));
     } catch (error) {
       console.error('Error removing vote:', error);
       throw error;
@@ -186,7 +175,29 @@ export class FirebaseInteractionRepository implements InteractionRepository {
         throw new Error('User must be authenticated to comment');
       }
 
-      const batch = writeBatch(firestore);
+      // Offline: queue the comment for sync
+      if (!(await isOnline())) {
+        const localComment: Comment = {
+          id: `local_${Date.now()}`,
+          noteId: request.noteId,
+          userId: auth.currentUser.uid,
+          username: auth.currentUser.displayName || 'Anonymous',
+          userAvatar: auth.currentUser.photoURL || undefined,
+          content: request.content,
+          createdAt: new Date(),
+          upvotes: 0,
+          downvotes: 0,
+        };
+        await offlineQueue.enqueue({
+          type: 'add_comment',
+          payload: {
+            noteId: request.noteId,
+            content: request.content,
+            username: localComment.username,
+          },
+        });
+        return localComment;
+      }
 
       const commentData: Omit<FirebaseCommentDoc, 'id'> = {
         noteId: request.noteId,
@@ -199,14 +210,9 @@ export class FirebaseInteractionRepository implements InteractionRepository {
         downvotes: 0,
       };
 
+      // commentsCount is incremented via the comments onCreate trigger
       const commentRef = doc(collection(firestore, Collections.COMMENTS));
-      batch.set(commentRef, { ...commentData, id: commentRef.id });
-
-      // Update note comment count
-      const noteRef = doc(firestore, Collections.NOTES, request.noteId);
-      batch.update(noteRef, { commentsCount: increment(1) });
-
-      await batch.commit();
+      await setDoc(commentRef, { ...commentData, id: commentRef.id });
 
       return this.mapFirebaseCommentToComment({
         ...commentData,
@@ -247,6 +253,14 @@ export class FirebaseInteractionRepository implements InteractionRepository {
         throw new Error('User must be authenticated to delete comment');
       }
 
+      if (!(await isOnline())) {
+        await offlineQueue.enqueue({
+          type: 'delete_comment',
+          payload: { commentId: id },
+        });
+        return;
+      }
+
       // Get comment to check ownership and get noteId
       const commentRef = doc(firestore, Collections.COMMENTS, id);
       const commentSnap = await getDoc(commentRef);
@@ -261,16 +275,8 @@ export class FirebaseInteractionRepository implements InteractionRepository {
         throw new Error('Not authorized to delete this comment');
       }
 
-      const batch = writeBatch(firestore);
-
-      // Delete comment
-      batch.delete(commentRef);
-
-      // Update note comment count
-      const noteRef = doc(firestore, Collections.NOTES, commentData.noteId);
-      batch.update(noteRef, { commentsCount: increment(-1) });
-
-      await batch.commit();
+      // commentsCount is decremented via the comments onDelete trigger
+      await deleteDoc(commentRef);
     } catch (error) {
       console.error('Error deleting comment:', error);
       throw error;

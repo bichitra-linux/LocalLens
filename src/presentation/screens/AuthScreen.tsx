@@ -17,6 +17,7 @@ import { useHeaderHeight } from '@react-navigation/elements';
 import { useSignInWithEmail, useSignUpWithEmail, useSignInWithGoogle } from '../hooks/useAuth';
 import { useTheme } from '../hooks/useTheme';
 import { ThemeColors } from '../../utils/theme';
+import { getAuthErrorMessage } from '../../utils/authErrors';
 
 export const AuthScreen: React.FC = () => {
   const [isSignUp, setIsSignUp] = useState(false);
@@ -65,6 +66,11 @@ export const AuthScreen: React.FC = () => {
       return;
     }
 
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      Alert.alert('Error', 'Please enter a valid email address');
+      return;
+    }
+
     if (isSignUp) {
       if (password !== confirmPassword) {
         Alert.alert('Error', 'Passwords do not match');
@@ -87,13 +93,13 @@ export const AuthScreen: React.FC = () => {
           },
         });
       } catch (error: unknown) {
-        Alert.alert('Sign Up Failed', error instanceof Error ? error.message : 'An error occurred');
+        Alert.alert('Sign Up Failed', getAuthErrorMessage(error));
       }
     } else {
       try {
         await signInMutation.mutateAsync({ email, password });
       } catch (error: unknown) {
-        Alert.alert('Sign In Failed', error instanceof Error ? error.message : 'An error occurred');
+        Alert.alert('Sign In Failed', getAuthErrorMessage(error));
       }
     }
   }, [email, password, isSignUp, confirmPassword, username, displayName, signInMutation, signUpMutation]);
@@ -101,8 +107,15 @@ export const AuthScreen: React.FC = () => {
   const handleGoogleSignIn = useCallback(async () => {
     try {
       await googleSignInMutation.mutateAsync();
-    } catch (error: unknown) {
-      Alert.alert('Google Sign In Failed', error instanceof Error ? error.message : 'An error occurred');
+    } catch (error: any) {
+      const { statusCodes } = require('@react-native-google-signin/google-signin');
+      // Silently ignore user cancelling the Google sheet
+      if (error?.code === statusCodes.SIGN_IN_CANCELLED) return;
+      if (error?.code === statusCodes.PLAY_SERVICES_NOT_AVAILABLE) {
+        Alert.alert('Google Sign In Failed', 'Google Play Services are not available on this device.');
+        return;
+      }
+      Alert.alert('Google Sign In Failed', getAuthErrorMessage(error));
     }
   }, [googleSignInMutation]);
 

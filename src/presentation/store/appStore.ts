@@ -13,7 +13,6 @@ interface LocationState {
 interface AppState {
   // Auth state
   user: User | null;
-  isAuthenticating: boolean;
   
   // Location state
   location: LocationState;
@@ -26,7 +25,6 @@ interface AppState {
   
   // Actions
   setUser: (user: User | null) => void;
-  setAuthenticating: (isAuthenticating: boolean) => void;
   setLocation: (location: LocationState) => void;
   setLocationEnabled: (enabled: boolean) => void;
   setLocationSource: (source: 'gps' | 'network' | null) => void;
@@ -38,7 +36,6 @@ interface AppState {
 
 const initialState = {
   user: null,
-  isAuthenticating: false,
   location: {
     latitude: null,
     longitude: null,
@@ -59,9 +56,6 @@ export const useAppStore = create<AppState>()(
         
         setUser: (user) => 
           set({ user }, false, 'setUser'),
-        
-        setAuthenticating: (isAuthenticating) => 
-          set({ isAuthenticating }, false, 'setAuthenticating'),
         
         setLocation: (location) => 
           set({ location }, false, 'setLocation'),

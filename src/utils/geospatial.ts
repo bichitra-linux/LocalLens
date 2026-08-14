@@ -3,6 +3,28 @@ import ngeohash from 'ngeohash';
 export const GEOHASH_PRECISION = 7; // ~150m precision
 export const SEARCH_RADIUS_KM = 5; // Default search radius
 
+// Approximate geohash cell width in km per precision (ngeohash)
+const PRECISION_WIDTH_KM: Record<number, number> = {
+  1: 5000,
+  2: 1250,
+  3: 156,
+  4: 39.1,
+  5: 4.89,
+  6: 1.22,
+  7: 0.153,
+};
+
+/**
+ * Pick geohash precision so the 3x3 neighbor block fully covers the search radius.
+ * (block extends 1.5 cells from the center point, so cell width >= radius / 1.5)
+ */
+export const getPrecisionForRadius = (radiusKm: number): number => {
+  for (let p = GEOHASH_PRECISION; p >= 2; p--) {
+    if (radiusKm <= PRECISION_WIDTH_KM[p] * 1.5) return p;
+  }
+  return 2;
+};
+
 /**
  * Generate geohash for coordinates
  */
@@ -62,37 +84,7 @@ export const calculateDistance = (
   return R * c;
 };
 
-/**
- * Get geohash bounds for a given radius
- * This helps determine which geohash prefixes to query
- */
-export const getGeohashBounds = (
-  latitude: number,
-  longitude: number,
-  radiusKm: number
-): { sw: string; ne: string } => {
-  // Calculate approximate lat/lng bounds
-  const kmPerDegreeLat = 111.32;
-  const kmPerDegreeLon = 40075 * Math.cos(latitude * (Math.PI / 180)) / 360;
-  
-  const deltaLat = radiusKm / kmPerDegreeLat;
-  const deltaLon = radiusKm / kmPerDegreeLon;
-  
-  const sw = ngeohash.encode(
-    latitude - deltaLat,
-    longitude - deltaLon,
-    GEOHASH_PRECISION
-  );
-  
-  const ne = ngeohash.encode(
-    latitude + deltaLat,
-    longitude + deltaLon,
-    GEOHASH_PRECISION
-  );
-  
-  return { sw, ne };
-};
-
 const toRadians = (degrees: number): number => {
   return degrees * (Math.PI / 180);
 };
+

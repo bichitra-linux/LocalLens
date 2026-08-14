@@ -12,7 +12,6 @@ const mockUserRepository: jest.Mocked<UserRepository> = {
   signUpWithEmail: jest.fn(),
   signInWithGoogle: jest.fn(),
   signOut: jest.fn(),
-  createAnonymousUser: jest.fn(),
 };
 
 const createMockUser = (overrides: Partial<User> = {}): User => ({

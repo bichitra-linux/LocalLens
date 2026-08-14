@@ -35,6 +35,8 @@ export class OfflineMapPackService {
     region: MapRegion,
     onProgress?: (status: OfflinePackStatus) => void
   ): Promise<void> {
+    const manager = requireNativeOfflineManager();
+
     await this.savePackRecord(region, 'downloading', 0);
 
     const packMetadata = {
@@ -44,7 +46,7 @@ export class OfflineMapPackService {
       createdAt: new Date().toISOString(),
     };
 
-    await OfflineManager.createPack(
+    await manager.createPack(
       {
         name: region.id,
         styleURL: getMapStyle(),

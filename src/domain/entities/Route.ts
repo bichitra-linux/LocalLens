@@ -55,4 +55,5 @@ export interface NavigationState {
   currentSpeed: number;         // m/s
   isOnRoute: boolean;
   offRouteDistance: number;     // meters from route
+  arrived: boolean;
 }

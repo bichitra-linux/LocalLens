@@ -11,7 +11,6 @@ import {
   deleteDoc,
   setDoc,
   Timestamp,
-  increment,
   getDoc,
   getDocs,
   query,
@@ -24,6 +23,15 @@ import { generateGeohash, generateGeohashPrefixes } from './geospatial';
 
 const QUEUE_KEY = 'locallens_offline_queue';
 const MAX_RETRIES = 5;
+
+export const isOnline = async (): Promise<boolean> => {
+  try {
+    const netInfo = await NetInfo.fetch();
+    return netInfo.isConnected ?? false;
+  } catch {
+    return false;
+  }
+};
 
 export class OfflineQueueService {
   private static instance: OfflineQueueService;
@@ -231,6 +239,8 @@ export class OfflineQueueService {
   }
 
   private async executeVote(payload: any, userId: string): Promise<void> {
+    // ponytail: note/user counters are maintained by Cloud Function triggers
+    // on the votes collection, so this only syncs the vote document itself.
     const votesRef = collection(firestore, Collections.VOTES);
     const existingQuery = query(
       votesRef,
@@ -244,12 +254,8 @@ export class OfflineQueueService {
       const existingVote = existingSnapshot.docs[0];
       if (existingVote.data().type !== payload.voteType) {
         await updateDoc(existingVote.ref, { type: payload.voteType });
-        const noteRef = doc(firestore, Collections.NOTES, payload.noteId);
-        const oldType = existingVote.data().type;
-        await updateDoc(noteRef, {
-          [oldType === 'up' ? 'upvotes' : 'downvotes']: increment(-1),
-          [payload.voteType === 'up' ? 'upvotes' : 'downvotes']: increment(1),
-        });
+      } else {
+        await deleteDoc(existingVote.ref);
       }
     } else {
       const voteData: Omit<FirebaseVoteDoc, 'id'> = {
@@ -260,14 +266,11 @@ export class OfflineQueueService {
       };
       const voteRef = doc(collection(firestore, Collections.VOTES));
       await setDoc(voteRef, { ...voteData, id: voteRef.id });
-
-      const noteRef = doc(firestore, Collections.NOTES, payload.noteId);
-      await updateDoc(noteRef, payload.voteType === 'up' ? { upvotes: increment(1) } : { downvotes: increment(1) });
     }
   }
 
   private async executeRemoveVote(payload: any, userId: string): Promise<void> {
-    // Find and delete the vote document
+    // Find and delete the vote document (counters handled by triggers)
     const votesRef = collection(firestore, Collections.VOTES);
     const voteQuery = query(
       votesRef,
@@ -280,10 +283,6 @@ export class OfflineQueueService {
     if (!voteSnapshot.empty) {
       await deleteDoc(voteSnapshot.docs[0].ref);
     }
-
-    // Decrement the vote count on the note
-    const noteRef = doc(firestore, Collections.NOTES, payload.noteId);
-    await updateDoc(noteRef, payload.voteType === 'up' ? { upvotes: increment(-1) } : { downvotes: increment(-1) });
   }
 
   private async executeAddReaction(payload: any, userId: string): Promise<void> {
@@ -326,18 +325,10 @@ export class OfflineQueueService {
 
     const commentRef = doc(collection(firestore, Collections.COMMENTS));
     await setDoc(commentRef, { ...commentData, id: commentRef.id });
-
-    const noteRef = doc(firestore, Collections.NOTES, payload.noteId);
-    await updateDoc(noteRef, { commentsCount: increment(1) });
   }
 
   private async executeDeleteComment(payload: any): Promise<void> {
     await deleteDoc(doc(firestore, Collections.COMMENTS, payload.commentId));
-
-    if (payload.noteId) {
-      const noteRef = doc(firestore, Collections.NOTES, payload.noteId);
-      await updateDoc(noteRef, { commentsCount: increment(-1) });
-    }
   }
 
   private async executeDeleteNote(payload: any): Promise<void> {

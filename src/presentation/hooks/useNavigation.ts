@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useAppStore } from '../store/appStore';
 import { RoutingService } from '../../utils/routing';
+import { locationService } from '../../utils/locationService';
 import { getCompassData, hasArrived, formatDistance, formatDuration, calculateDistanceToDestination } from '../../utils/compassNavigation';
 import { Route, LatLng, NavigationState, RouteStep } from '../../domain/entities/Route';
 
@@ -18,10 +19,10 @@ export const useAppNavigation = () => {
     currentSpeed: 0,
     isOnRoute: true,
     offRouteDistance: 0,
+    arrived: false,
   });
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const getCurrentLatLng = useCallback((): LatLng | null => {
     if (location.latitude !== null && location.longitude !== null) {
@@ -39,6 +40,9 @@ export const useAppNavigation = () => {
 
     setIsLoading(true);
     setError(null);
+
+    // Start continuous location updates so steps/arrival stay live
+    locationService.startWatchingLocation();
 
     try {
       let route: Route;
@@ -79,6 +83,7 @@ export const useAppNavigation = () => {
         currentSpeed: 0,
         isOnRoute: true,
         offRouteDistance: 0,
+        arrived: false,
       });
     } catch (err: any) {
       setError(err.message);
@@ -98,11 +103,14 @@ export const useAppNavigation = () => {
       currentSpeed: 0,
       isOnRoute: true,
       offRouteDistance: 0,
+      arrived: false,
     });
-    if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-      intervalRef.current = null;
-    }
+    locationService.stopWatchingLocation();
+  }, []);
+
+  // Stop location watch when the screen unmounts
+  useEffect(() => {
+    return () => locationService.stopWatchingLocation();
   }, []);
 
   useEffect(() => {
@@ -116,8 +124,10 @@ export const useAppNavigation = () => {
     if (hasArrived(currentLocation, route.destination)) {
       setNavigationState(prev => ({
         ...prev,
+        arrived: true,
         distanceRemaining: 0,
         durationRemaining: 0,
+        distanceToNextStep: 0,
       }));
       return;
     }

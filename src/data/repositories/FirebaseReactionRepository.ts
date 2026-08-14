@@ -17,6 +17,9 @@ import {
   REACTION_EMOJIS,
 } from '../../domain/entities/Reaction';
 import { Collections } from '../models/FirebaseModels';
+import { OfflineQueueService, isOnline } from '../../utils/offlineQueue';
+
+const offlineQueue = OfflineQueueService.getInstance();
 
 export class FirebaseReactionRepository implements ReactionRepository {
   private collectionRef = collection(firestore, Collections.REACTIONS);
@@ -24,6 +27,21 @@ export class FirebaseReactionRepository implements ReactionRepository {
   async addReaction(request: CreateReactionRequest): Promise<Reaction> {
     const user = auth.currentUser;
     if (!user) throw new Error('User not authenticated');
+
+    // Offline: queue the reaction for sync
+    if (!(await isOnline())) {
+      await offlineQueue.enqueue({
+        type: 'add_reaction',
+        payload: { noteId: request.noteId, emoji: request.emoji },
+      });
+      return {
+        id: `local_${Date.now()}`,
+        noteId: request.noteId,
+        userId: user.uid,
+        emoji: request.emoji,
+        createdAt: new Date(),
+      };
+    }
 
     const q = query(
       this.collectionRef,
@@ -63,6 +81,15 @@ export class FirebaseReactionRepository implements ReactionRepository {
   async removeReaction(noteId: string, emoji: string): Promise<void> {
     const user = auth.currentUser;
     if (!user) throw new Error('User not authenticated');
+
+    // Offline: queue the removal for sync
+    if (!(await isOnline())) {
+      await offlineQueue.enqueue({
+        type: 'remove_reaction',
+        payload: { noteId, emoji },
+      });
+      return;
+    }
 
     const q = query(
       this.collectionRef,
